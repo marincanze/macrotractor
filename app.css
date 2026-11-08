@@ -603,7 +603,8 @@ textarea { resize: vertical; min-height: 96px; font-size: .9rem; line-height: 1.
 .nutr.bad b, .nutr.bad .lim { color: var(--danger); }
 .nutr.bad i::after { background: var(--danger); }
 .nutr.good i::after { background: var(--protein); }
-.health-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.health-card { padding: 16px 18px; }
+.health-row { display: flex; align-items: center; gap: 12px; }
 .health-score { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
 .health-score b { display: block; font-size: .92rem; }
 .health-score small { color: var(--muted); font-size: .76rem; }
@@ -646,7 +647,7 @@ textarea { resize: vertical; min-height: 96px; font-size: .9rem; line-height: 1.
 .entry-actions .btn svg { width: 16px; height: 16px; }
 
 @media (max-width: 680px) {
-  .card.details { padding: 14px; }
+  .card.details, .health-card { padding: 14px; }
   .nutr-grid { gap: 8px; }
   .nutr b { font-size: .95rem; }
   .nutr .lbl, .nutr .lim { font-size: .66rem; }

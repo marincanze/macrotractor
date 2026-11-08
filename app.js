@@ -297,7 +297,12 @@ function renderDetails(tg, s) {
         <span class="lim">${t(l.max ? "nutr.max" : "nutr.min", { n: r0(goal) })}</span>
         <i style="--p:${Math.min(100, (v / goal) * 100 || 0)}%"></i>
       </div>`;
-    }).join("")}</div>
+    }).join("")}</div>`;
+
+  // zdravje dneva je na dnu, pod dnevnikom
+  const hc = $("#healthCard");
+  hc.hidden = !state.entries.length && !r;
+  hc.innerHTML = `
     <div class="health-row">
       <div class="health-score">
         ${r ? healthBadge(r.score, "lg") : h ? healthBadge(h, "lg") : `<span class="hs lg none">–</span>`}
@@ -308,7 +313,7 @@ function renderDetails(tg, s) {
     ${r?.comment ? `<p class="health-note">${esc(r.comment)}</p>` : ""}`;
 }
 
-$("#detailCard").addEventListener("click", async (e) => {
+$("#healthCard").addEventListener("click", async (e) => {
   const btn = e.target.closest("#rateDayBtn");
   if (!btn) return;
   btn.disabled = true;
