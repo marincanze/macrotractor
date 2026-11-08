@@ -102,13 +102,8 @@
           </div>
         </div>
         <div class="macro-cards" id="macroCards"></div>
+        <div class="card details" id="detailCard"></div>
       </div>
-
-      <button class="recipe-cta" id="recipeBtn">
-        <span class="cta-ico"><svg><use href="#i-chef"/></svg></span>
-        <span><b data-i18n="recipe.cta"></b><small data-i18n="recipe.ctaSub"></small></span>
-        <svg class="cta-arrow"><use href="#i-right"/></svg>
-      </button>
 
       <div class="composer card">
         <form id="chatForm" class="chat-form" autocomplete="off">
@@ -131,10 +126,19 @@
             <span class="action-ico a3"><svg><use href="#i-keyboard"/></svg></span>
             <span data-i18n="add.code"></span>
           </button>
+          <button class="action" id="quickBtn" type="button">
+            <span class="action-ico a4"><svg><use href="#i-bookmark"/></svg></span>
+            <span data-i18n="add.quick"></span>
+          </button>
         </div>
-        <div id="recentWrap" class="recent"></div>
         <div id="pending"></div>
       </div>
+
+      <button class="recipe-cta" id="recipeBtn">
+        <span class="cta-ico"><svg><use href="#i-chef"/></svg></span>
+        <span><b data-i18n="recipe.cta"></b><small data-i18n="recipe.ctaSub"></small></span>
+        <svg class="cta-arrow"><use href="#i-right"/></svg>
+      </button>
 
       <div id="meals"></div>
       <div class="card empty-card" id="entriesEmpty">
@@ -339,6 +343,22 @@
     </div>
     <div id="recipeSaved" hidden></div>
     <div id="recipeOut"></div>
+  </dialog>
+
+  <dialog id="quickDialog" class="dialog">
+    <form method="dialog" class="dialog-head">
+      <h3 data-i18n="quick.title"></h3>
+      <button class="icon-btn" data-i18n-aria="close"><svg><use href="#i-x"/></svg></button>
+    </form>
+    <div id="quickOut" class="quick"></div>
+  </dialog>
+
+  <dialog id="entryDialog" class="dialog">
+    <form method="dialog" class="dialog-head">
+      <h3 data-i18n="entry.edit"></h3>
+      <button class="icon-btn" data-i18n-aria="close"><svg><use href="#i-x"/></svg></button>
+    </form>
+    <div id="entryOut"></div>
   </dialog>
 
   <dialog id="barcodeDialog" class="dialog">

@@ -18,6 +18,9 @@ const state = {
 };
 
 const MACROS = ["protein", "carbs", "fat"];
+// dodatna hranila (g) in vse, kar se pri spremembi količine sorazmerno preračuna
+const EXTRAS = ["sat_fat", "sugar", "fiber", "salt"];
+const NUTR = ["kcal", ...MACROS, ...EXTRAS];
 
 function isoDay(d) {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
@@ -34,6 +37,13 @@ function nowTime() {
 const shortDate = (d) => `${+d.slice(8)}.${+d.slice(5, 7)}.`;
 const macroLine = (it, unit = "") =>
   `<span class="p">${t("macro.p")} ${r1(it.protein)}${unit}</span> · <span class="c">${t("macro.c")} ${r1(it.carbs)}${unit}</span> · <span class="f">${t("macro.f")} ${r1(it.fat)}${unit}</span>`;
+
+const extrasLine = (it) =>
+  EXTRAS.filter((k) => it[k] != null).map((k) => `${t("nutr." + k)} ${r1(it[k])} g`).join(" · ");
+
+// ocena zdravja (1–10) z barvo
+const healthBadge = (h, cls = "") =>
+  h ? `<span class="hs ${h >= 7 ? "good" : h >= 5 ? "mid" : "bad"} ${cls}">${String(r1(h)).replace(".", I18N[LANG].locale.startsWith("sl") ? "," : ".")}</span>` : "";
 
 /* ---------------------------------------------------------------- API */
 
@@ -85,10 +95,28 @@ function targets(p) {
 }
 
 function totals(entries) {
-  return entries.reduce(
-    (s, e) => ({ kcal: s.kcal + e.kcal, protein: s.protein + e.protein, carbs: s.carbs + e.carbs, fat: s.fat + e.fat }),
-    { kcal: 0, protein: 0, carbs: 0, fat: 0 }
-  );
+  const s = Object.fromEntries(NUTR.map((k) => [k, 0]));
+  for (const e of entries) for (const k of NUTR) s[k] += +e[k] || 0;
+  return s;
+}
+
+// povprečna ocena zdravja, utežena s kalorijami
+function healthOf(entries) {
+  const rated = entries.filter((e) => e.health);
+  if (!rated.length) return null;
+  const w = rated.reduce((s, e) => s + Math.max(1, e.kcal), 0);
+  return rated.reduce((s, e) => s + e.health * Math.max(1, e.kcal), 0) / w;
+}
+
+// priporočene meje: nasičene ≤ 10 % energije, sladkorji ≤ 90 g / 2000 kcal (EU RI),
+// vlaknine ≥ 14 g / 1000 kcal, sol ≤ 5 g (WHO)
+function extraLimits(kcal) {
+  return {
+    sat_fat: { max: (kcal * 0.1) / 9 },
+    sugar: { max: (kcal * 90) / 2000 },
+    fiber: { min: (kcal * 14) / 1000 },
+    salt: { max: 5 },
+  };
 }
 
 function remaining() {
@@ -171,6 +199,7 @@ function dayLabel(d) {
 async function loadEntries() {
   const data = await api("entries?day=" + state.day);
   state.entries = data.entries;
+  state.rating = data.rating || null;
   state.version = data.version;
   renderToday();
 }
@@ -224,6 +253,8 @@ function renderToday() {
     </div>`;
   }).join("");
 
+  renderDetails(tg, s);
+
   const groups = MEALS.map((m) => ({ ...m, items: state.entries.filter((e) => mealOf(e.time).key === m.key) }))
     .filter((g) => g.items.length);
   $("#meals").innerHTML = groups.map((g) => {
@@ -232,12 +263,13 @@ function renderToday() {
       <div class="meal-head">
         <span class="meal-emoji">${g.emoji}</span>
         <div><h3>${t("meal." + g.key)}</h3><div class="sub">${t("entries.count", { n: g.items.length })}</div></div>
+        ${healthBadge(healthOf(g.items))}
         <div class="tot">${r0(tot.kcal)} <small>kcal</small></div>
       </div>
       <ul class="entries">${g.items.map((e) => `
-        <li data-id="${e.id}">
+        <li data-id="${e.id}" data-edit="${e.id}">
           <div>
-            <div class="name">${esc(e.name)}${e.grams ? ` <small>· ${r0(e.grams)} g</small>` : ""}</div>
+            <div class="name">${esc(e.name)}${e.grams ? ` <small>· ${r0(e.grams)} g</small>` : ""} ${healthBadge(e.health, "sm")}</div>
             <div class="sub"><span class="p">${r1(e.protein)} ${t("macro.p")}</span><span class="c">${r1(e.carbs)} ${t("macro.c")}</span><span class="f">${r1(e.fat)} ${t("macro.f")}</span></div>
           </div>
           <span class="kcal">${r0(e.kcal)}<small>${esc(e.time)}</small></span>
@@ -249,10 +281,69 @@ function renderToday() {
   $("#entriesEmpty").hidden = state.entries.length > 0;
 }
 
+function renderDetails(tg, s) {
+  const lim = extraLimits(tg.kcal);
+  const h = healthOf(state.entries);
+  const r = state.rating;
+  $("#detailCard").innerHTML = `
+    <div class="nutr-grid">${EXTRAS.map((k) => {
+      const v = s[k], l = lim[k];
+      const goal = l.max ?? l.min;
+      const bad = l.max ? v > l.max : false;
+      const good = l.min ? v >= l.min : false;
+      return `<div class="nutr ${bad ? "bad" : ""} ${good ? "good" : ""}">
+        <span class="lbl">${t("nutr." + k)}</span>
+        <b>${r1(v)}<small> g</small></b>
+        <span class="lim">${t(l.max ? "nutr.max" : "nutr.min", { n: r0(goal) })}</span>
+        <i style="--p:${Math.min(100, (v / goal) * 100 || 0)}%"></i>
+      </div>`;
+    }).join("")}</div>
+    <div class="health-row">
+      <div class="health-score">
+        ${r ? healthBadge(r.score, "lg") : h ? healthBadge(h, "lg") : `<span class="hs lg none">–</span>`}
+        <div><b>${t(r ? "health.claude" : "health.title")}</b><small>${r ? "" : h ? t("health.meals") : t("health.none")}</small></div>
+      </div>
+      <button class="btn soft sm" id="rateDayBtn" ${state.entries.length ? "" : "disabled"}>${icon("sparkle")} ${t(r ? "health.rerate" : "health.rate")}</button>
+    </div>
+    ${r?.comment ? `<p class="health-note">${esc(r.comment)}</p>` : ""}`;
+}
+
+$("#detailCard").addEventListener("click", async (e) => {
+  const btn = e.target.closest("#rateDayBtn");
+  if (!btn) return;
+  btn.disabled = true;
+  const tg = targets(state.profile);
+  const old = btn.innerHTML;
+  btn.innerHTML = `<span class="spinner"></span> ${t("loading.day")}`;
+  try {
+    const r = await api("ai/day", {
+      method: "POST",
+      body: {
+        day: state.day, goal: state.profile.goal,
+        targets: { kcal: tg.kcal, protein: tg.protein, carbs: tg.carbs, fat: tg.fat },
+        entries: state.entries.map(({ name, grams, time, ...e }) => ({ name, grams, time, ...Object.fromEntries(NUTR.map((k) => [k, e[k]])) })),
+      },
+    });
+    await api("ratings", { method: "PUT", body: { day: state.day, score: r.score, comment: r.comment } });
+    state.rating = { score: r.score, comment: r.comment };
+    buzz();
+    renderToday();
+  } catch (err) {
+    toast(err.message, true);
+    btn.innerHTML = old;
+    btn.disabled = false;
+  }
+});
+
 $("#meals").addEventListener("click", async (e) => {
   const id = e.target.closest("[data-del]")?.dataset.del;
-  if (!id) return;
+  if (!id) {
+    const edit = e.target.closest("[data-edit]")?.dataset.edit;
+    if (edit) openEntryEditor(edit);
+    return;
+  }
   const entry = state.entries.find((x) => x.id === id);
+  if (!confirm(t("entry.confirmDelete", { name: entry?.name ?? "" }))) return;
   state.entries = state.entries.filter((x) => x.id !== id);
   renderToday();
   buzz();
@@ -268,16 +359,19 @@ $("#meals").addEventListener("click", async (e) => {
 
 /* ---- predogled vnosa pred potrditvijo ---- */
 
-function scaleItem(it, grams) {
-  if (!it._base || !it._base.grams) return { ...it, grams };
-  const f = grams / it._base.grams;
-  return {
-    ...it, grams,
-    kcal: it._base.kcal * f, protein: it._base.protein * f, carbs: it._base.carbs * f, fat: it._base.fat * f,
-  };
+// vrednosti iz `base`, preračunane na faktor f (nove grame / stare grame)
+function scaled(base, f) {
+  const out = {};
+  for (const k of NUTR) if (base[k] != null) out[k] = base[k] * f;
+  return out;
 }
 
-function showPending(items, { note = "", source, image } = {}) {
+function scaleItem(it, grams) {
+  if (!it._base || !it._base.grams) return { ...it, grams };
+  return { ...it, grams, ...scaled(it._base, grams / it._base.grams) };
+}
+
+function showPending(items, { note = "", source, image, health, healthNote } = {}) {
   const box = $("#pending");
   let current = items.map((it) => ({ ...it, _base: { ...it } }));
 
@@ -286,12 +380,13 @@ function showPending(items, { note = "", source, image } = {}) {
     box.innerHTML = `<div class="pending">
       ${image ? `<img class="preview-img" src="${image}" alt="">` : ""}
       ${note ? `<p class="pending-note">${icon("sparkle")}<span>${esc(note)}</span></p>` : ""}
+      ${health ? `<p class="pending-health">${healthBadge(health)}<span><b>${t("health.meal")}</b>${healthNote ? ` – ${esc(healthNote)}` : ""}</span></p>` : ""}
       ${current.map((it, i) => `
         <div class="pitem" data-i="${i}">
           <input value="${esc(it.name)}" data-f="name" aria-label="${t("pending.name")}">
           <span class="unit-input"><input type="number" min="0" inputmode="numeric" value="${r0(it.grams)}" data-f="grams" aria-label="${t("pending.grams")}"><em>g</em></span>
           <button class="icon-btn" data-rm="${i}" aria-label="${t("pending.remove")}">${icon("x")}</button>
-          <div class="meta">${r0(it.kcal)} kcal · ${macroLine(it)}</div>
+          <div class="meta">${metaLine(it)}</div>
         </div>`).join("")}
       <div class="pending-actions">
         <button class="btn ghost" data-cancel>${t("cancel")}</button>
@@ -309,7 +404,7 @@ function showPending(items, { note = "", source, image } = {}) {
     if (e.target.dataset.f === "name") current[i].name = e.target.value;
     if (e.target.dataset.f === "grams") {
       current[i] = scaleItem(current[i], +e.target.value || 0);
-      $(".meta", row).innerHTML = `${r0(current[i].kcal)} kcal · ${macroLine(current[i])}`;
+      $(".meta", row).innerHTML = metaLine(current[i]);
       $("[data-ok]", box).textContent = t("addKcal", { kcal: r0(totals(current).kcal) });
     }
   };
@@ -332,6 +427,11 @@ function showPending(items, { note = "", source, image } = {}) {
       }
     }
   };
+}
+
+function metaLine(it) {
+  const ex = extrasLine(it);
+  return `${r0(it.kcal)} kcal · ${macroLine(it)}${it.health ? ` ${healthBadge(it.health, "sm")}` : ""}${ex ? `<br><span class="extras">${ex}</span>` : ""}`;
 }
 
 async function addEntries(items, source) {
@@ -363,7 +463,7 @@ $("#chatForm").addEventListener("submit", async (e) => {
   try {
     const res = await api("ai/parse", { method: "POST", body: { text } });
     input.value = "";
-    showPending(res.items, { note: res.note, source: "chat" });
+    showPending(res.items, { note: res.note, source: "chat", health: res.health, healthNote: res.health_note });
   } catch (err) {
     $("#pending").innerHTML = "";
     toast(err.message, true);
@@ -372,20 +472,137 @@ $("#chatForm").addEventListener("submit", async (e) => {
 
 /* ---- nedavna živila ---- */
 
+let frequent = [], favorites = [];
+const pick = ({ name, grams, health, ...r }) => ({ name, grams, health: health || null, ...Object.fromEntries(NUTR.map((k) => [k, r[k] ?? null])) });
+
 async function loadRecent() {
   try {
-    const { recent } = await api("recent");
-    const wrap = $("#recentWrap");
-    wrap.innerHTML = recent.map((r, i) =>
-      `<button class="chip" data-r="${i}" title="${r0(r.kcal)} kcal">+ ${esc(r.name)}${r.grams ? ` ${r0(r.grams)} g` : ""}</button>`
-    ).join("");
-    wrap.onclick = (e) => {
-      const i = e.target.closest("[data-r]")?.dataset.r;
-      if (i === undefined) return;
-      const { name, grams, kcal, protein, carbs, fat } = recent[i];
-      showPending([{ name, grams, kcal, protein, carbs, fat }], { source: "recent" });
-    };
-  } catch {}
+    [{ recent: frequent }, { favorites }] = await Promise.all([api("recent"), api("favorites")]);
+  } catch {
+    return;
+  }
+  if ($("#quickDialog").open) renderQuick();
+}
+
+function quickRow(it, i, kind) {
+  const fav = kind === "fav" || favorites.some((f) => f.name.toLowerCase() === it.name.toLowerCase() && +f.grams === +it.grams);
+  return `<li>
+    <button class="q-add" data-${kind}="${i}">
+      <b>${esc(it.name)}${it.grams ? ` <small>· ${r0(it.grams)} g</small>` : ""}</b>
+      <span class="muted small">${r0(it.kcal)} kcal · ${macroLine(it)}${it.n > 1 ? ` · ${it.n}×` : ""}</span>
+    </button>
+    ${kind === "fav"
+      ? `<button class="q-star on" data-unfav="${i}" aria-label="${t("quick.remove")}">★</button>`
+      : `<button class="q-star ${fav ? "on" : ""}" data-star="${i}" aria-label="${t("quick.save")}" ${fav ? "disabled" : ""}>${fav ? "★" : "☆"}</button>`}
+  </li>`;
+}
+
+function renderQuick() {
+  $("#quickOut").innerHTML = `
+    <h4>${t("quick.saved")}</h4>
+    ${favorites.length ? `<ul class="quick-list">${favorites.map((f, i) => quickRow(f, i, "fav")).join("")}</ul>` : `<p class="muted small">${t("quick.noSaved")}</p>`}
+    <h4>${t("quick.frequent")}</h4>
+    ${frequent.length ? `<ul class="quick-list">${frequent.map((f, i) => quickRow(f, i, "freq")).join("")}</ul>` : `<p class="muted small">${t("quick.noFrequent")}</p>`}`;
+}
+
+async function saveFavorite(it) {
+  await api("favorites", { method: "POST", body: pick(it) });
+  toast(t("quick.saved_toast", { name: it.name }));
+  buzz();
+  await loadRecent();
+}
+
+$("#quickBtn").onclick = () => {
+  renderQuick();
+  $("#quickDialog").showModal();
+  loadRecent();
+};
+
+$("#quickOut").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.dataset.fav !== undefined || b.dataset.freq !== undefined) {
+      const it = b.dataset.fav !== undefined ? favorites[b.dataset.fav] : frequent[b.dataset.freq];
+      $("#quickDialog").close();
+      showPending([pick(it)], { source: "quick" });
+    } else if (b.dataset.star !== undefined) {
+      b.disabled = true;
+      await saveFavorite(frequent[b.dataset.star]);
+    } else if (b.dataset.unfav !== undefined) {
+      await api("favorites/" + favorites[b.dataset.unfav].id, { method: "DELETE" });
+      await loadRecent();
+    }
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+/* ---- urejanje vnosa ---- */
+
+function openEntryEditor(id) {
+  const e = state.entries.find((x) => x.id === id);
+  if (!e) return;
+  const d = $("#entryDialog");
+  const hasGrams = !!e.grams;
+  let cur = { ...e };
+  const out = $("#entryOut");
+  out.innerHTML = `
+    <form class="form" id="entryForm">
+      <label><span>${t("pending.name")}</span><input name="name" value="${esc(e.name)}"></label>
+      <div class="grid2">
+        <label><span>${t(hasGrams ? "entry.amount" : "entry.factor")}</span>
+          <span class="unit-input"><input type="number" name="amount" min="0" step="any" inputmode="decimal" value="${hasGrams ? r0(e.grams) : 1}"><em>${hasGrams ? "g" : "×"}</em></span></label>
+        <label><span>${t("entry.time")}</span><input type="time" name="time" value="${esc(e.time)}"></label>
+      </div>
+      <div class="macro-pills" id="entryCalc"></div>
+      <p class="muted small" id="entryExtras"></p>
+      <button class="btn primary full" type="submit">${t("entry.save")}</button>
+      <div class="entry-actions">
+        <button type="button" class="btn soft" data-act="fav">★ ${t("quick.save")}</button>
+        <button type="button" class="btn ghost" data-act="del">${icon("trash")} ${t("delete")}</button>
+      </div>
+    </form>`;
+  const f = $("#entryForm");
+  const calc = () => {
+    const a = +f.amount.value || 0;
+    const factor = hasGrams ? a / e.grams : a;
+    cur = { ...e, ...scaled(e, factor), grams: hasGrams ? a : e.grams, name: f.name.value.trim() || e.name, time: f.time.value || e.time };
+    $("#entryCalc").innerHTML = `<span class="k">${r0(cur.kcal)} kcal</span><span class="p">${t("macro.p")} ${r1(cur.protein)} g</span><span class="c">${t("macro.c")} ${r1(cur.carbs)} g</span><span class="f">${t("macro.f")} ${r1(cur.fat)} g</span>${healthBadge(cur.health)}`;
+    $("#entryExtras").textContent = extrasLine(cur);
+  };
+  calc();
+  f.oninput = calc;
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const body = { name: cur.name, grams: cur.grams, time: cur.time };
+    for (const k of NUTR) if (cur[k] != null) body[k] = Math.round(cur[k] * 10) / 10;
+    try {
+      await api("entries/" + id, { method: "PUT", body });
+      d.close();
+      toast(t("entry.saved"));
+      buzz();
+      await loadEntries();
+      loadRecent();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+  f.onclick = async (ev) => {
+    const act = ev.target.closest("[data-act]")?.dataset.act;
+    if (act === "fav") {
+      ev.target.closest("button").disabled = true;
+      await saveFavorite(cur).catch((err) => toast(err.message, true));
+    } else if (act === "del") {
+      if (!confirm(t("entry.confirmDelete", { name: e.name }))) return;
+      d.close();
+      await api("entries/" + id, { method: "DELETE" });
+      toast(t("deleted", { name: e.name }));
+      await loadEntries();
+      loadRecent();
+    }
+  };
+  d.showModal();
 }
 
 /* ---- slike ---- */
@@ -418,7 +635,7 @@ $("#photoInput").addEventListener("change", async (e) => {
     showLoading(t("loading.photo"));
     const res = await api("ai/photo", { method: "POST", body: { image: base64, media_type: "image/jpeg", note } });
     if (note) $("#chatInput").value = "";
-    showPending(res.items, { note: res.note, source: "photo", image: dataUrl });
+    showPending(res.items, { note: res.note, source: "photo", image: dataUrl, health: res.health, healthNote: res.health_note });
   } catch (err) {
     $("#pending").innerHTML = "";
     toast(err.message, true);
@@ -510,7 +727,9 @@ async function lookupProduct(code) {
       <div class="product">
         ${p.image ? `<img src="${esc(p.image)}" alt="">` : `<div class="noimg">📦</div>`}
         <div><b>${esc(p.name)}</b><div class="muted">${esc(p.brand)}</div>
-        <div class="muted small">${t("product.per100")}: ${r0(p.per100.kcal)} kcal · ${macroLine(p.per100)}</div></div>
+        <div class="muted small">${t("product.per100")}: ${r0(p.per100.kcal)} kcal · ${macroLine(p.per100)}</div>
+        ${extrasLine(p.per100) ? `<div class="muted small">${extrasLine(p.per100)}</div>` : ""}
+        ${p.health ? `<div class="muted small">${t("health.title")} ${healthBadge(p.health, "sm")}${p.nutriscore ? ` · Nutri-Score ${esc(p.nutriscore.toUpperCase())}` : ""}</div>` : ""}</div>
       </div>
       <form class="form" id="qtyForm">
         <label><span>${t("product.qty")}</span><span class="unit-input"><input type="number" id="qtyInput" min="1" inputmode="decimal" value="${r0(def)}" required><em>g / ml</em></span></label>
@@ -519,10 +738,7 @@ async function lookupProduct(code) {
       </form>`;
     const calc = () => {
       const g = +$("#qtyInput").value || 0, f = g / 100;
-      return {
-        name: p.name, grams: g,
-        kcal: p.per100.kcal * f, protein: p.per100.protein * f, carbs: p.per100.carbs * f, fat: p.per100.fat * f,
-      };
+      return { name: p.name, grams: g, health: p.health || null, ...scaled(p.per100, f) };
     };
     const show = () => {
       const it = calc();

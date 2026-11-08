@@ -1,6 +1,6 @@
 // Predpomni lupino aplikacije; API klici gredo vedno na strežnik.
 // Poti so relativne, da aplikacija deluje tudi v podmapi (npr. GitHub Pages).
-const CACHE = "macrotractor-v7";
+const CACHE = "macrotractor-v8";
 const SHELL = ["./", "index.html", "app.css", "app.js", "i18n.js", "local.js", "config.js", "manifest.json", "icons/icon-192.png", "icons/favicon-48.png"];
 
 self.addEventListener("install", (e) => {

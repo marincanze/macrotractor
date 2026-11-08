@@ -24,6 +24,8 @@
     return { profile: null, entries: [], weights: [], recipes: [], version: "0" };
   }
   let db = load();
+  db.favorites ||= [];
+  db.ratings ||= {};
   function save() {
     db.version = String(Date.now());
     localStorage.setItem(KEY, JSON.stringify(db));
@@ -35,6 +37,14 @@
   const r1 = (n) => Math.round((+n || 0) * 10) / 10;
   const now = () => Date.now() / 1000;
   const today = () => isoDay(new Date());
+
+  // hranila v vnosu: kcal, makroti, dodatna hranila (lahko manjkajo) in ocena zdravja 1–10
+  function nutrients(it) {
+    const out = {};
+    for (const k of NUTR) out[k] = it[k] == null || it[k] === "" ? (EXTRAS.includes(k) ? null : 0) : r1(it[k]);
+    out.health = it.health ? Math.max(1, Math.min(10, r1(it.health))) : null;
+    return out;
+  }
 
   function setWeight(day, kg) {
     db.weights = db.weights.filter((w) => w.day !== day);
@@ -74,7 +84,7 @@
       const entries = db.entries
         .filter((e) => e.day === day)
         .sort((a, b) => a.time.localeCompare(b.time) || a.created_at - b.created_at);
-      return { entries, version: db.version };
+      return { entries, rating: db.ratings[day] || null, version: db.version };
     },
     "POST entries": (p, q, b) => {
       const out = (b.items || []).map((it) => ({
@@ -83,7 +93,7 @@
         time: b.time || new Date().toTimeString().slice(0, 5),
         name: String(it.name).slice(0, 120),
         grams: +it.grams || null,
-        kcal: r1(it.kcal), protein: r1(it.protein), carbs: r1(it.carbs), fat: r1(it.fat),
+        ...nutrients(it),
         source: b.source || "manual",
         created_at: now(),
       }));
@@ -93,7 +103,7 @@
     },
     "PUT entries": (p, q, b) => {
       const e = db.entries.find((x) => x.id === p[1]);
-      if (e) for (const k of ["name", "grams", "kcal", "protein", "carbs", "fat", "time"]) if (k in b) e[k] = b[k];
+      if (e) for (const k of ["name", "grams", "time", ...NUTR, "health"]) if (k in b) e[k] = b[k];
       save();
       return { ok: true };
     },
@@ -152,7 +162,28 @@
         g.n++;
         if (e.created_at >= g.last) Object.assign(g, e, { last: e.created_at, n: g.n });
       }
-      return { recent: Object.values(groups).sort((a, b) => b.last - a.last).slice(0, 12) };
+      // najprej najpogostejša, nato najnovejša
+      return { recent: Object.values(groups).sort((a, b) => b.n - a.n || b.last - a.last).slice(0, 15) };
+    },
+
+    "GET favorites": () => ({ favorites: db.favorites }),
+    "POST favorites": (p, q, b) => {
+      const f = { id: rid(), name: String(b.name).slice(0, 120), grams: +b.grams || null, ...nutrients(b), created_at: now() };
+      db.favorites = db.favorites.filter((x) => !(x.name.toLowerCase() === f.name.toLowerCase() && x.grams === f.grams));
+      db.favorites.push(f);
+      save();
+      return { id: f.id };
+    },
+    "DELETE favorites": (p) => {
+      db.favorites = db.favorites.filter((f) => f.id !== p[1]);
+      save();
+      return { ok: true };
+    },
+
+    "PUT ratings": (p, q, b) => {
+      db.ratings[b.day] = { score: Math.max(1, Math.min(10, +b.score || 0)), comment: String(b.comment || "") };
+      save();
+      return { ok: true };
     },
 
     "GET recipes": () => ({ recipes: [...db.recipes].sort((a, b) => b.saved_at - a.saved_at) }),
@@ -178,6 +209,8 @@
       entries: db.entries,
       weights: db.weights,
       recipes: db.recipes.map(({ id, saved_at, ...r }) => ({ id, data: JSON.stringify(r), created_at: saved_at })),
+      favorites: db.favorites.map(({ id, created_at, ...f }) => ({ id, data: JSON.stringify(f), created_at })),
+      ratings: Object.entries(db.ratings).map(([day, r]) => ({ day, ...r })),
     }),
     "POST backup": (p, q, b) => {
       if (b.app !== "macrotractor") throw new Error(t("backup.bad"));
@@ -187,6 +220,8 @@
         entries: (b.entries || []).filter((e) => e && e.id && e.day),
         weights: (b.weights || []).filter((w) => w && w.day),
         recipes: (b.recipes || []).map((r) => ({ ...JSON.parse(r.data), id: r.id, saved_at: r.created_at })),
+        favorites: (b.favorites || []).map((f) => ({ ...JSON.parse(f.data), id: f.id, created_at: f.created_at })),
+        ratings: Object.fromEntries((b.ratings || []).map((r) => [r.day, { score: r.score, comment: r.comment }])),
         version: "0",
       };
       save();
@@ -196,7 +231,7 @@
     "GET barcode": async (p) => {
       const code = (p[1] || "").replace(/\D/g, "");
       if (!code) throw new Error(t("product.code"));
-      const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=product_name,product_name_sl,product_name_en,brands,nutriments,serving_quantity,image_front_small_url`;
+      const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=product_name,product_name_sl,product_name_en,brands,nutriments,serving_quantity,image_front_small_url,nutriscore_grade`;
       let data;
       try {
         data = await fetch(url).then((r) => r.json());
@@ -218,7 +253,13 @@
           brand: pr.brands || "",
           image: pr.image_front_small_url,
           serving_g: pr.serving_quantity,
-          per100: { kcal: r1(kcal), protein: num("proteins_100g"), carbs: num("carbohydrates_100g"), fat: num("fat_100g") },
+          per100: {
+            kcal: r1(kcal), protein: num("proteins_100g"), carbs: num("carbohydrates_100g"), fat: num("fat_100g"),
+            sat_fat: num("saturated-fat_100g"), sugar: num("sugars_100g"), fiber: num("fiber_100g"), salt: num("salt_100g"),
+          },
+          nutriscore: /^[a-e]$/.test(pr.nutriscore_grade || "") ? pr.nutriscore_grade : null,
+          // Nutri-Score A–E → ocena zdravja 1–10
+          health: { a: 9, b: 7, c: 5, d: 3, e: 2 }[pr.nutriscore_grade] || null,
         },
       };
     },
@@ -228,13 +269,15 @@
 
   /* ---------------------------------------------------------------- vprašanja za Claude */
 
-  const ITEMS_FORMAT = '{"items":[{"name":"...","grams":0,"kcal":0,"protein":0,"carbs":0,"fat":0}],"note":"..."}';
+  const ITEMS_FORMAT =
+    '{"items":[{"name":"...","grams":0,"kcal":0,"protein":0,"carbs":0,"fat":0,"sat_fat":0,"sugar":0,"fiber":0,"salt":0,"health":0}],"health":0,"health_note":"...","note":"..."}';
+  const DAY_FORMAT = '{"score":0,"comment":"..."}';
   const RECIPE_FORMAT =
     '{"title":"...","servings":1,"minutes":0,"ingredients":[{"name":"...","amount":"..."}],"steps":["..."],"kcal":0,"protein":0,"carbs":0,"fat":0,"tip":"..."}';
 
   const P = {
     sl: {
-      food: "Si prehranski asistent. Oceni živila, količine v gramih in hranilne vrednosti za DEJANSKO zaužito količino: kcal ter beljakovine (protein), ogljikove hidrate (carbs) in maščobe (fat) v gramih. Kjer količina ni podana, predpostavi običajno porcijo. Uporabljaj realne vrednosti iz prehranskih tabel. Imena živil piši kratko, v slovenščini. V \"note\" v enem stavku navedi predpostavke.",
+      food: "Si prehranski asistent. Oceni živila, količine v gramih in hranilne vrednosti za DEJANSKO zaužito količino: kcal ter beljakovine (protein), ogljikove hidrate (carbs) in maščobe (fat) v gramih. Kjer količina ni podana, predpostavi običajno porcijo. Uporabljaj realne vrednosti iz prehranskih tabel. Imena živil piši kratko, v slovenščini. Za vsako živilo dodaj še nasičene maščobe (sat_fat), sladkorje (sugar), vlaknine (fiber) in sol (salt) v gramih ter \"health\": oceno 1–10, kako zdravo je (10 = nepredelano, hranljivo; 1 = ultra predelano, veliko sladkorja, nasičenih maščob ali soli). Dodaj še skupno oceno obroka \"health\" (1–10) in v \"health_note\" en kratek stavek, zakaj. V \"note\" v enem stavku navedi predpostavke.",
       ate: "Kaj sem pojedel/a:",
       photo: "Na priloženi fotografiji je obrok. Prepoznaj vsa živila na krožniku in oceni njihovo maso v gramih (upoštevaj velikost krožnika in pribora).",
       userNote: "Moja opomba:",
@@ -252,10 +295,13 @@
       prev: "Prejšnji predlog:",
       tweak: "Prilagodi ga takole:",
       tweakEnd: "Vrni prilagojen recept (ali nov, če to zahtevam).",
+      day: "Si prehranski strokovnjak. Oceni, kako zdrav je bil moj prehranski dan, z oceno 1–10 (10 = odlično uravnotežen, veliko nepredelane hrane, vlaknin in beljakovin; 1 = zelo nezdrav). Upoštevaj kakovost živil, ravnovesje makrohranil glede na moj cilj, nasičene maščobe, sladkor, sol in vlaknine. V \"comment\" v 2–3 kratkih stavkih v slovenščini napiši, kaj je bilo dobro in kaj naj izboljšam.",
+      dayGoal: (g, tg) => `Moj cilj: ${g}. Dnevni cilj: ${Math.round(tg.kcal)} kcal, ${Math.round(tg.protein)} g beljakovin, ${Math.round(tg.carbs)} g OH, ${Math.round(tg.fat)} g maščob.`,
+      dayList: "Danes sem pojedel/a:",
       ask: "Predlagaj en realen, okusen recept, ki na porcijo čim bolj natančno doseže ciljne vrednosti, brez da jih preseže. Če so cilji zelo majhni, predlagaj lahek prigrizek. Sestavine v gramih, pogoste v običajnih trgovinah.",
     },
     en: {
-      food: "You are a nutrition assistant. Estimate the foods, amounts in grams and nutrition for the amount ACTUALLY eaten: kcal plus protein, carbs and fat in grams. Where no amount is given, assume a typical serving. Use realistic values from nutrition tables. Keep food names short, in English. In \"note\", state your assumptions in one sentence.",
+      food: "You are a nutrition assistant. Estimate the foods, amounts in grams and nutrition for the amount ACTUALLY eaten: kcal plus protein, carbs and fat in grams. Where no amount is given, assume a typical serving. Use realistic values from nutrition tables. Keep food names short, in English. For each food also add saturated fat (sat_fat), sugars (sugar), fibre (fiber) and salt (salt) in grams, and \"health\": a 1–10 score of how healthy it is (10 = whole, nutritious; 1 = ultra-processed, high in sugar, saturated fat or salt). Also add an overall meal score \"health\" (1–10) and one short sentence on why in \"health_note\". In \"note\", state your assumptions in one sentence.",
       ate: "What I ate:",
       photo: "The attached photo shows a meal. Identify every food on the plate and estimate its weight in grams (use the plate and cutlery for scale).",
       userNote: "My note:",
@@ -273,6 +319,9 @@
       prev: "Previous suggestion:",
       tweak: "Adjust it like this:",
       tweakEnd: "Return the adjusted recipe (or a new one if I ask for it).",
+      day: "You are a nutrition expert. Rate how healthy my day of eating was on a 1–10 scale (10 = very well balanced, mostly whole foods, plenty of fibre and protein; 1 = very unhealthy). Consider food quality, macro balance for my goal, saturated fat, sugar, salt and fibre. In \"comment\", write 2–3 short sentences in English on what was good and what to improve.",
+      dayGoal: (g, tg) => `My goal: ${g}. Daily targets: ${Math.round(tg.kcal)} kcal, ${Math.round(tg.protein)} g protein, ${Math.round(tg.carbs)} g carbs, ${Math.round(tg.fat)} g fat.`,
+      dayList: "Today I ate:",
       ask: "Suggest one realistic, tasty recipe that hits the per-serving targets as closely as possible without exceeding them. If the targets are very small, suggest a light snack. Ingredients in grams, common in ordinary supermarkets.",
     },
   };
@@ -281,6 +330,12 @@
     const L = P[LANG] || P.sl;
     if (kind === "parse") return [L.food, "", `${L.ate} ${b.text}`, "", L.format, ITEMS_FORMAT].join("\n");
     if (kind === "photo") return [L.food, "", L.photo, b.note ? `${L.userNote} ${b.note}` : "", "", L.format, ITEMS_FORMAT].filter((x, i, a) => x || a[i - 1]).join("\n");
+    if (kind === "day") {
+      const fmtN = (v) => (v == null ? "?" : Math.round(v * 10) / 10);
+      const rows = (b.entries || []).map((e) =>
+        `- ${e.time} ${e.name}${e.grams ? ` (${Math.round(e.grams)} g)` : ""}: ${Math.round(e.kcal)} kcal, P ${fmtN(e.protein)}, C ${fmtN(e.carbs)}, F ${fmtN(e.fat)}, sat ${fmtN(e.sat_fat)}, sugar ${fmtN(e.sugar)}, fiber ${fmtN(e.fiber)}, salt ${fmtN(e.salt)}`);
+      return [L.day, "", L.dayGoal(L.goal[b.goal] || b.goal, b.targets || {}), "", L.dayList, ...rows, "", L.format, DAY_FORMAT].join("\n");
+    }
     // recept
     const lines = [L.chef, "", L.left(b.remaining || {}), L.target(b.target || b.remaining || {}), L.servings(b.servings || 1), `${L.goalL} ${L.goal[b.goal] || b.goal}.`];
     if (b.focus?.length) lines.push(`${L.focus} ${b.focus.map((f) => L.focusNames[f]).join(", ")}.`);
@@ -311,6 +366,12 @@
       return null;
     }
     const n = (v) => (isFinite(parseFloat(v)) ? parseFloat(v) : 0);
+    const opt = (v) => (isFinite(parseFloat(v)) ? parseFloat(v) : null);
+    const score = (v) => (opt(v) ? Math.max(1, Math.min(10, opt(v))) : null);
+    if (kind === "day") {
+      if (!score(d.score)) return null;
+      return { score: score(d.score), comment: String(d.comment || "") };
+    }
     if (kind === "recipe") {
       if (!d.title || !Array.isArray(d.ingredients) || !Array.isArray(d.steps)) return null;
       return {
@@ -323,7 +384,12 @@
     const items = Array.isArray(d) ? d : d.items;
     if (!Array.isArray(items) || !items.length) return null;
     return {
-      items: items.map((i) => ({ name: String(i.name || "?"), grams: n(i.grams), kcal: n(i.kcal), protein: n(i.protein), carbs: n(i.carbs), fat: n(i.fat) })),
+      items: items.map((i) => ({
+        name: String(i.name || "?"), grams: n(i.grams), kcal: n(i.kcal), protein: n(i.protein), carbs: n(i.carbs), fat: n(i.fat),
+        sat_fat: opt(i.sat_fat), sugar: opt(i.sugar), fiber: opt(i.fiber), salt: opt(i.salt), health: score(i.health),
+      })),
+      health: score(d.health),
+      health_note: String(d.health_note || ""),
       note: String(d.note || ""),
     };
   }
@@ -372,7 +438,7 @@
       const err = dlg.querySelector(".ho-err");
 
       const tryUse = (text) => {
-        const res = parseAnswer(kind === "recipe" ? "recipe" : "items", text);
+        const res = parseAnswer(kind === "recipe" || kind === "day" ? kind : "items", text);
         if (!res) {
           err.textContent = t("local.bad");
           err.hidden = false;

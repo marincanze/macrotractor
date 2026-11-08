@@ -275,7 +275,7 @@ summary { cursor: pointer; color: var(--muted); font-weight: 500; font-size: .9r
 .send-btn:active { transform: scale(.94); }
 .send-btn svg { stroke-width: 2.3; }
 
-.add-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.add-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
 .action {
   display: flex; align-items: center; gap: 10px; padding: 9px 12px;
   background: var(--card-2); border: 1px solid transparent; border-radius: 16px;
@@ -293,9 +293,6 @@ summary { cursor: pointer; color: var(--muted); font-weight: 500; font-size: .9r
   .action { flex-direction: column; text-align: center; gap: 6px; padding: 12px 6px; font-size: .76rem; }
 }
 
-.recent { display: flex; gap: 6px; overflow-x: auto; margin: 10px -12px 0; padding: 0 12px 2px; scrollbar-width: none; }
-.recent::-webkit-scrollbar { display: none; }
-.recent:empty { display: none; }
 .chip {
   flex: none; background: transparent; border: 1px solid var(--border-strong); color: var(--muted);
   border-radius: 999px; padding: 6px 12px; font: inherit; font-size: .8rem; font-weight: 500; cursor: pointer; transition: .2s;
@@ -592,3 +589,66 @@ textarea { resize: vertical; min-height: 96px; font-size: .9rem; line-height: 1.
 .handoff .ho-btns .btn { flex: 1 1 auto; }
 .handoff .ho-err { margin: 8px 0 0; font-size: .85rem; }
 @media (max-width: 680px) { textarea { font-size: 16px; } }
+
+/* ---------------------------------------------------------------- dodatna hranila, zdravje */
+.card.details { grid-column: 1 / -1; padding: 16px 18px; }
+.nutr-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.nutr { position: relative; display: grid; gap: 1px; padding-bottom: 8px; min-width: 0; }
+.nutr .lbl { font-size: .74rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nutr b { font-size: 1.05rem; font-weight: 700; letter-spacing: -.02em; }
+.nutr b small { font-size: .7rem; color: var(--dim); font-weight: 500; }
+.nutr .lim { font-size: .7rem; color: var(--dim); }
+.nutr i { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; border-radius: 4px; background: var(--card-2); overflow: hidden; }
+.nutr i::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--p); background: var(--accent); border-radius: 4px; }
+.nutr.bad b, .nutr.bad .lim { color: var(--danger); }
+.nutr.bad i::after { background: var(--danger); }
+.nutr.good i::after { background: var(--protein); }
+.health-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.health-score { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+.health-score b { display: block; font-size: .92rem; }
+.health-score small { color: var(--muted); font-size: .76rem; }
+.health-note { margin: 10px 0 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
+.btn.sm { padding: 8px 14px; font-size: .84rem; gap: 6px; }
+.btn.sm svg { width: 15px; height: 15px; }
+.btn.sm .spinner { width: 14px; height: 14px; }
+
+.hs { display: inline-grid; place-items: center; min-width: 28px; height: 22px; padding: 0 7px; border-radius: 999px; font-size: .76rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.hs.good { background: rgba(95, 207, 194, .16); color: var(--protein); }
+.hs.mid { background: rgba(242, 187, 94, .16); color: var(--carbs); }
+.hs.bad { background: rgba(239, 138, 166, .16); color: var(--fat); }
+.hs.none { background: var(--card-2); color: var(--dim); }
+.hs.sm { min-width: 22px; height: 18px; font-size: .68rem; padding: 0 5px; }
+.hs.lg { min-width: 52px; height: 52px; border-radius: 16px; font-size: 1.3rem; }
+.meal-head .hs { margin-left: auto; }
+.meal-head .hs + .tot { margin-left: 10px; }
+.entries .name .hs { vertical-align: 1px; margin-left: 2px; }
+.entries li[data-edit] { cursor: pointer; }
+.entries li[data-edit]:active { background: var(--card-2); }
+.pending-health { display: flex; gap: 10px; align-items: flex-start; font-size: .84rem; color: var(--muted); margin: 0 0 10px; }
+.pending-health b { color: var(--text); font-weight: 600; }
+.pitem .meta .extras { color: var(--dim); }
+
+/* ---------------------------------------------------------------- hitra izbira, urejanje */
+.quick h4 { margin: 4px 0 8px; font-size: .74rem; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
+.quick h4 + p { margin: 0 0 18px; }
+.quick-list { list-style: none; padding: 0; margin: 0 0 18px; display: grid; gap: 6px; }
+.quick-list li { display: flex; gap: 6px; }
+.q-add {
+  flex: 1; min-width: 0; text-align: left; display: grid; gap: 2px; padding: 11px 14px; border-radius: 14px;
+  background: var(--card-2); border: 1px solid var(--border); color: var(--text); font: inherit; cursor: pointer;
+}
+.q-add b { font-weight: 600; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-add b small { color: var(--muted); font-weight: 500; }
+.q-add:active { border-color: var(--accent-line); }
+.q-star { width: 44px; flex: none; border-radius: 14px; border: 1px solid var(--border); background: transparent; color: var(--dim); font-size: 1.2rem; cursor: pointer; }
+.q-star.on { color: var(--accent); }
+.entry-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.entry-actions .btn svg { width: 16px; height: 16px; }
+
+@media (max-width: 680px) {
+  .card.details { padding: 14px; }
+  .nutr-grid { gap: 8px; }
+  .nutr b { font-size: .95rem; }
+  .nutr .lbl, .nutr .lim { font-size: .66rem; }
+  .hs.lg { min-width: 46px; height: 46px; font-size: 1.15rem; }
+}
