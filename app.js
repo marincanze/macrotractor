@@ -1397,7 +1397,29 @@ async function boot() {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker
+    .register("sw.js", { updateViaCache: "none" })
+    .then((reg) => document.addEventListener("visibilitychange", () => !document.hidden && reg.update().catch(() => {})))
+    .catch(() => {});
+  // nova različica je prevzela nadzor → enkrat osveži, da se naloži v celoti
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController && !reloaded) {
+      reloaded = true;
+      location.reload();
+    }
+  });
 }
+
+$("#appVersion").textContent = window.MT_BUILD || "dev";
+// ročna posodobitev: počisti predpomnilnik aplikacije (podatki v localStorage ostanejo)
+$("#updateBtn").onclick = async () => {
+  try {
+    for (const r of (await navigator.serviceWorker?.getRegistrations()) || []) await r.unregister();
+    for (const k of await caches.keys()) await caches.delete(k);
+  } catch {}
+  location.reload();
+};
 
 boot();
