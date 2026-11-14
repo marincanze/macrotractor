@@ -12,6 +12,7 @@
   const DEFAULT_PROFILE = {
     sex: "male", age: 30, height_cm: 180, weight_kg: 80, activity: 1.55,
     goal: "maintain", rate: 0.5, protein_per_kg: 2.0, fat_pct: 25, custom_kcal: null,
+    tdee_override: null, goal_weight: null,
   };
 
   /* ---------------------------------------------------------------- shramba */
@@ -26,6 +27,7 @@
   let db = load();
   db.favorites ||= [];
   db.ratings ||= {};
+  db.kv ||= {}; // splošna shramba: voda, shranjeni obroki …
   function save() {
     db.version = String(Date.now());
     localStorage.setItem(KEY, JSON.stringify(db));
@@ -128,17 +130,26 @@
       const end = q.end || today();
       const start = shiftDay(end, -(days - 1));
       const inRange = db.entries.filter((e) => e.day >= start && e.day <= end);
+      const zero = () => ({ ...Object.fromEntries(NUTR.map((k) => [k, 0])), n: 0, hw: 0, hs: 0 });
       const byDay = {};
       for (const e of inRange) {
-        const d = (byDay[e.day] ||= { kcal: 0, protein: 0, carbs: 0, fat: 0, n: 0 });
-        for (const m of ["kcal", "protein", "carbs", "fat"]) d[m] += e[m];
+        const d = (byDay[e.day] ||= zero());
+        for (const m of NUTR) d[m] += +e[m] || 0;
         d.n++;
+        if (e.health) {
+          const w = Math.max(1, e.kcal);
+          d.hw += w;
+          d.hs += e.health * w;
+        }
       }
       const series = [];
       for (let i = 0; i < days; i++) {
         const day = shiftDay(start, i);
-        const d = byDay[day] || { kcal: 0, protein: 0, carbs: 0, fat: 0, n: 0 };
-        series.push({ day, kcal: r1(d.kcal), protein: r1(d.protein), carbs: r1(d.carbs), fat: r1(d.fat), n: d.n });
+        const d = byDay[day] || zero();
+        series.push({
+          day, ...Object.fromEntries(NUTR.map((k) => [k, r1(d[k])])), n: d.n,
+          health: db.ratings[day]?.score ?? (d.hw ? r1(d.hs / d.hw) : null),
+        });
       }
       const top = {};
       for (const e of inRange) {
@@ -154,7 +165,7 @@
       };
     },
 
-    "GET recent": () => {
+    "GET recent": (p, q) => {
       const groups = {};
       for (const e of db.entries) {
         const k = e.name.toLowerCase() + "|" + (e.grams || "");
@@ -163,7 +174,7 @@
         if (e.created_at >= g.last) Object.assign(g, e, { last: e.created_at, n: g.n });
       }
       // najprej najpogostejša, nato najnovejša
-      return { recent: Object.values(groups).sort((a, b) => b.n - a.n || b.last - a.last).slice(0, 15) };
+      return { recent: Object.values(groups).sort((a, b) => b.n - a.n || b.last - a.last).slice(0, +q.limit || 15) };
     },
 
     "GET favorites": () => ({ favorites: db.favorites }),
@@ -176,6 +187,13 @@
     },
     "DELETE favorites": (p) => {
       db.favorites = db.favorites.filter((f) => f.id !== p[1]);
+      save();
+      return { ok: true };
+    },
+
+    "GET kv": (p) => ({ value: db.kv[p[1]] ?? null }),
+    "PUT kv": (p, q, b) => {
+      db.kv[p[1]] = b.value;
       save();
       return { ok: true };
     },
@@ -211,6 +229,7 @@
       recipes: db.recipes.map(({ id, saved_at, ...r }) => ({ id, data: JSON.stringify(r), created_at: saved_at })),
       favorites: db.favorites.map(({ id, created_at, ...f }) => ({ id, data: JSON.stringify(f), created_at })),
       ratings: Object.entries(db.ratings).map(([day, r]) => ({ day, ...r })),
+      kv: Object.entries(db.kv).map(([key, value]) => ({ key, value: JSON.stringify(value) })),
     }),
     "POST backup": (p, q, b) => {
       if (b.app !== "macrotractor") throw new Error(t("backup.bad"));
@@ -222,6 +241,7 @@
         recipes: (b.recipes || []).map((r) => ({ ...JSON.parse(r.data), id: r.id, saved_at: r.created_at })),
         favorites: (b.favorites || []).map((f) => ({ ...JSON.parse(f.data), id: f.id, created_at: f.created_at })),
         ratings: Object.fromEntries((b.ratings || []).map((r) => [r.day, { score: r.score, comment: r.comment }])),
+        kv: Object.fromEntries((b.kv || []).map((r) => [r.key, JSON.parse(r.value)])),
         version: "0",
       };
       save();
@@ -277,8 +297,9 @@
 
   const P = {
     sl: {
-      food: "Si prehranski asistent. Oceni živila, količine v gramih in hranilne vrednosti za DEJANSKO zaužito količino: kcal ter beljakovine (protein), ogljikove hidrate (carbs) in maščobe (fat) v gramih. Kjer količina ni podana, predpostavi običajno porcijo. Uporabljaj realne vrednosti iz prehranskih tabel. Imena živil piši kratko, v slovenščini. Za vsako živilo dodaj še nasičene maščobe (sat_fat), sladkorje (sugar), vlaknine (fiber) in sol (salt) v gramih ter \"health\": oceno 1–10, kako zdravo je (10 = nepredelano, hranljivo; 1 = ultra predelano, veliko sladkorja, nasičenih maščob ali soli). Dodaj še skupno oceno obroka \"health\" (1–10) in v \"health_note\" en kratek stavek, zakaj. V \"note\" v enem stavku navedi predpostavke.",
+      food: "Si prehranski asistent. Oceni živila, količine v gramih in hranilne vrednosti za DEJANSKO zaužito količino: kcal ter beljakovine (protein), ogljikove hidrate (carbs) in maščobe (fat) v gramih. Kjer količina ni podana, predpostavi običajno porcijo. Sestavljeno jed razdeli na glavne sestavine. Pri kuhanih živilih upoštevaj maso v stanju, kot je bilo pojedeno (kuhan riž, pečeno meso), in to zapiši v ime; olje ali maslo za pripravo navedi kot ločeno živilo, če je bilo verjetno uporabljeno. Uporabljaj realne vrednosti iz prehranskih tabel in preveri, da se kcal ujemajo z makrohranili (4/4/9 kcal na g). Imena živil piši kratko, v slovenščini. Za vsako živilo dodaj še nasičene maščobe (sat_fat), sladkorje (sugar), vlaknine (fiber) in sol (salt) v gramih ter \"health\": oceno 1–10, kako zdravo je (10 = nepredelano, hranljivo; 1 = ultra predelano, veliko sladkorja, nasičenih maščob ali soli). Dodaj še skupno oceno obroka \"health\" (1–10) in v \"health_note\" en kratek stavek, zakaj. V \"note\" v enem stavku navedi predpostavke.",
       ate: "Kaj sem pojedel/a:",
+      known: "Za ta moja znana živila uporabi točno te vrednosti na 100 g (kcal / beljakovine / OH / maščobe):",
       photo: "Na priloženi fotografiji je obrok. Prepoznaj vsa živila na krožniku in oceni njihovo maso v gramih (upoštevaj velikost krožnika in pribora).",
       userNote: "Moja opomba:",
       format: "Odgovori SAMO z JSON v enem bloku kode, točno v tej obliki (številke brez enot):",
@@ -301,8 +322,9 @@
       ask: "Predlagaj en realen, okusen recept, ki na porcijo čim bolj natančno doseže ciljne vrednosti, brez da jih preseže. Če so cilji zelo majhni, predlagaj lahek prigrizek. Sestavine v gramih, pogoste v običajnih trgovinah.",
     },
     en: {
-      food: "You are a nutrition assistant. Estimate the foods, amounts in grams and nutrition for the amount ACTUALLY eaten: kcal plus protein, carbs and fat in grams. Where no amount is given, assume a typical serving. Use realistic values from nutrition tables. Keep food names short, in English. For each food also add saturated fat (sat_fat), sugars (sugar), fibre (fiber) and salt (salt) in grams, and \"health\": a 1–10 score of how healthy it is (10 = whole, nutritious; 1 = ultra-processed, high in sugar, saturated fat or salt). Also add an overall meal score \"health\" (1–10) and one short sentence on why in \"health_note\". In \"note\", state your assumptions in one sentence.",
+      food: "You are a nutrition assistant. Estimate the foods, amounts in grams and nutrition for the amount ACTUALLY eaten: kcal plus protein, carbs and fat in grams. Where no amount is given, assume a typical serving. Split a composite dish into its main ingredients. For cooked foods use the weight as eaten (cooked rice, roasted meat) and say so in the name; list oil or butter used in cooking as a separate item when it was likely used. Use realistic values from nutrition tables and check that kcal agree with the macros (4/4/9 kcal per g). Keep food names short, in English. For each food also add saturated fat (sat_fat), sugars (sugar), fibre (fiber) and salt (salt) in grams, and \"health\": a 1–10 score of how healthy it is (10 = whole, nutritious; 1 = ultra-processed, high in sugar, saturated fat or salt). Also add an overall meal score \"health\" (1–10) and one short sentence on why in \"health_note\". In \"note\", state your assumptions in one sentence.",
       ate: "What I ate:",
+      known: "For these foods I know, use exactly these values per 100 g (kcal / protein / carbs / fat):",
       photo: "The attached photo shows a meal. Identify every food on the plate and estimate its weight in grams (use the plate and cutlery for scale).",
       userNote: "My note:",
       format: "Reply ONLY with JSON in a single code block, exactly in this shape (numbers without units):",
@@ -328,8 +350,11 @@
 
   function buildPrompt(kind, b) {
     const L = P[LANG] || P.sl;
-    if (kind === "parse") return [L.food, "", `${L.ate} ${b.text}`, "", L.format, ITEMS_FORMAT].join("\n");
-    if (kind === "photo") return [L.food, "", L.photo, b.note ? `${L.userNote} ${b.note}` : "", "", L.format, ITEMS_FORMAT].filter((x, i, a) => x || a[i - 1]).join("\n");
+    const known = (b.known || []).length
+      ? ["", L.known, ...b.known.map((k) => `- ${k.name}: ${k.kcal} / ${k.protein} / ${k.carbs} / ${k.fat}`)]
+      : [];
+    if (kind === "parse") return [L.food, "", `${L.ate} ${b.text}`, ...known, "", L.format, ITEMS_FORMAT].join("\n");
+    if (kind === "photo") return [L.food, "", L.photo, b.note ? `${L.userNote} ${b.note}` : "", ...known, "", L.format, ITEMS_FORMAT].filter((x, i, a) => x || a[i - 1]).join("\n");
     if (kind === "day") {
       const fmtN = (v) => (v == null ? "?" : Math.round(v * 10) / 10);
       const rows = (b.entries || []).map((e) =>
@@ -368,6 +393,7 @@
     const n = (v) => (isFinite(parseFloat(v)) ? parseFloat(v) : 0);
     const opt = (v) => (isFinite(parseFloat(v)) ? parseFloat(v) : null);
     const score = (v) => (opt(v) ? Math.max(1, Math.min(10, opt(v))) : null);
+    if (d.title === "..." || d.comment === "..." || d.items?.[0]?.name === "...") return null;
     if (kind === "day") {
       if (!score(d.score)) return null;
       return { score: score(d.score), comment: String(d.comment || "") };
@@ -400,6 +426,15 @@
   dlg.className = "dialog handoff";
   document.body.append(dlg);
 
+  // prepozna vrsto odgovora (živila, recept, ocena dneva) – za odgovor, ki pride prek »Deli«
+  window.mtParseAny = (text) => {
+    for (const kind of ["items", "recipe", "day"]) {
+      const res = parseAnswer(kind, text);
+      if (res) return { kind, res };
+    }
+    return null;
+  };
+
   function askClaude(kind, b) {
     const prompt = buildPrompt(kind, b);
     const image = kind === "photo"
@@ -407,6 +442,10 @@
       : null;
     const canShare = !!navigator.share;
     const canShareImg = !!(image && navigator.canShare?.({ files: [image], text: prompt }));
+    // neposredna povezava odpre nov pogovor z že vpisanim vprašanjem (brez menija za deljenje)
+    const link = image ? null : "https://claude.ai/new?q=" + encodeURIComponent(prompt);
+    // če odgovor pride nazaj prek »Deli → Macrotractor«, se aplikacija naloži na novo
+    try { localStorage.setItem("mt_pending", JSON.stringify({ kind, day: b.day || state.day, at: Date.now() })); } catch {}
 
     return new Promise((resolve, reject) => {
       let done = false;
@@ -420,6 +459,7 @@
           <p class="muted small">${image && !canShareImg ? t("local.noShareFiles") : t(image ? "local.step1Photo" : "local.step1Sub")}</p>
           <div class="ho-btns">
             ${canShare && (!image || canShareImg) ? `<button type="button" class="btn primary" data-act="share">${icon("share")} ${t("local.share")}</button>` : ""}
+            ${link ? `<a class="btn ${canShare ? "soft" : "primary"}" data-act="link" href="${esc(link)}" target="_blank" rel="noopener">${icon("send")} ${t("local.link")}</a>` : ""}
             <button type="button" class="btn soft" data-act="copy">${icon("copy")} ${t("local.copy")}</button>
             ${image && !canShareImg ? `<button type="button" class="btn soft" data-act="img">${icon("download")} ${t("local.saveImg")}</button>` : ""}
           </div>
@@ -427,21 +467,23 @@
         <section class="ho-step">
           <h4>${t("local.step2")}</h4>
           <p class="muted small">${t("local.step2Sub")}</p>
-          <textarea rows="4" placeholder="${esc(t("local.pastePh"))}"></textarea>
+          <textarea rows="3" placeholder="${esc(t("local.pastePh"))}"></textarea>
           <p class="error ho-err" hidden></p>
           <div class="ho-btns">
-            <button type="button" class="btn soft" data-act="paste">${icon("copy")} ${t("local.paste")}</button>
-            <button type="button" class="btn primary" data-act="use">${t("local.use")}</button>
+            <button type="button" class="btn primary" data-act="paste">${icon("copy")} ${t("local.paste")}</button>
+            <button type="button" class="btn soft" data-act="use">${t("local.use")}</button>
           </div>
         </section>`;
       const ta = dlg.querySelector("textarea");
       const err = dlg.querySelector(".ho-err");
 
-      const tryUse = (text) => {
-        const res = parseAnswer(kind === "recipe" || kind === "day" ? kind : "items", text);
+      const tryUse = (text, silent = false) => {
+        const res = text === prompt ? null : parseAnswer(kind === "recipe" || kind === "day" ? kind : "items", text);
         if (!res) {
-          err.textContent = t("local.bad");
-          err.hidden = false;
+          if (!silent) {
+            err.textContent = t("local.bad");
+            err.hidden = false;
+          }
           return false;
         }
         done = true;
@@ -449,6 +491,19 @@
         resolve(res);
         return true;
       };
+
+      // ob vrnitvi iz Clauda poskusi odgovor prebrati sam (ko je dostop do odložišča že dovoljen)
+      const onReturn = async () => {
+        if (document.hidden || !dlg.open || done || ta.value) return;
+        try {
+          const perm = await navigator.permissions.query({ name: "clipboard-read" });
+          if (perm.state !== "granted") return;
+          const text = await navigator.clipboard.readText();
+          if (text && text.includes("{")) tryUse(text, true);
+        } catch {}
+      };
+      document.addEventListener("visibilitychange", onReturn);
+      window.addEventListener("focus", onReturn);
 
       dlg.onclick = async (e) => {
         const btn = e.target.closest("[data-act]");
@@ -458,6 +513,9 @@
           try {
             await navigator.share(canShareImg ? { text: prompt, files: [image] } : { text: prompt });
           } catch {}
+        } else if (act === "link") {
+          // povezava se odpre sama; vprašanje še kopiraj, če ga Claude ne bi vpisal
+          copyPlain(prompt);
         } else if (act === "copy") {
           await copyPlain(prompt);
           toast(t("local.copied"));
@@ -480,6 +538,9 @@
       ta.addEventListener("paste", () => setTimeout(() => ta.value.includes("}") && tryUse(ta.value), 0));
 
       dlg.onclose = () => {
+        document.removeEventListener("visibilitychange", onReturn);
+        window.removeEventListener("focus", onReturn);
+        try { localStorage.removeItem("mt_pending"); } catch {}
         if (!done) reject(new Error(t("local.cancelled")));
       };
       dlg.showModal();

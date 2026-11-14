@@ -15,6 +15,8 @@ const state = {
   version: null,
   statsDays: 7,
   view: "today",
+  water: {}, // { dan: ml }
+  meals: [], // shranjeni obroki (predloge)
 };
 
 const MACROS = ["protein", "carbs", "fat"];
@@ -69,6 +71,15 @@ async function api(path, opts = {}) {
   return data;
 }
 
+const kvGet = async (key, fallback) => (await api("kv/" + key)).value ?? fallback;
+const kvSet = (key, value) => api("kv/" + key, { method: "PUT", body: { value } });
+
+async function loadExtras() {
+  try {
+    [state.water, state.meals] = await Promise.all([kvGet("water", {}), kvGet("meals", [])]);
+  } catch {}
+}
+
 function toast(msg, err = false) {
   const el = $("#toast");
   el.textContent = msg;
@@ -83,7 +94,9 @@ function toast(msg, err = false) {
 function targets(p) {
   const w = +p.weight_kg, h = +p.height_cm, a = +p.age;
   const bmr = 10 * w + 6.25 * h - 5 * a + (p.sex === "female" ? -161 : 5);
-  const tdee = bmr * +p.activity;
+  const formulaTdee = bmr * +p.activity;
+  // izmerjena poraba (iz teže in vnosov) ima prednost pred oceno po formuli
+  const tdee = +p.tdee_override || formulaTdee;
   // 1 kg maščobnega tkiva ≈ 7700 kcal
   const delta = p.goal === "cut" ? -(+p.rate * 7700) / 7 : p.goal === "bulk" ? (+p.rate * 7700) / 7 : 0;
   const floor = p.sex === "female" ? 1200 : 1500;
@@ -91,7 +104,7 @@ function targets(p) {
   const protein = +p.protein_per_kg * w;
   const fat = (kcal * (+p.fat_pct / 100)) / 9;
   const carbs = Math.max(0, (kcal - protein * 4 - fat * 9) / 4);
-  return { bmr, tdee, delta, kcal, protein, carbs, fat };
+  return { bmr, tdee, formulaTdee, delta, kcal, protein, carbs, fat };
 }
 
 function totals(entries) {
@@ -254,6 +267,8 @@ function renderToday() {
   }).join("");
 
   renderDetails(tg, s);
+  renderWater();
+  renderWeek();
 
   const groups = MEALS.map((m) => ({ ...m, items: state.entries.filter((e) => mealOf(e.time).key === m.key) }))
     .filter((g) => g.items.length);
@@ -265,6 +280,11 @@ function renderToday() {
         <div><h3>${t("meal." + g.key)}</h3><div class="sub">${t("entries.count", { n: g.items.length })}</div></div>
         ${healthBadge(healthOf(g.items))}
         <div class="tot">${r0(tot.kcal)} <small>kcal</small></div>
+      </div>
+      <div class="meal-tools">
+        <span class="meal-macros">${macroLine(tot, " g")}</span>
+        ${state.day !== isoDay(new Date()) ? `<button class="chip" data-copy-meal="${g.key}">${icon("repeat")} ${t("meal.copyToday")}</button>` : ""}
+        <button class="chip" data-save-meal="${g.key}">${icon("bookmark")} ${t("meal.save")}</button>
       </div>
       <ul class="entries">${g.items.map((e) => `
         <li data-id="${e.id}" data-edit="${e.id}">
@@ -280,6 +300,69 @@ function renderToday() {
   }).join("");
   $("#entriesEmpty").hidden = state.entries.length > 0;
 }
+
+/* ---- teden: sedem dni z izpolnjenostjo cilja, dotik preklopi dan ---- */
+
+function weekStart(day) {
+  const d = new Date(day + "T12:00:00");
+  return shiftDay(day, -((d.getDay() + 6) % 7));
+}
+
+async function renderWeek() {
+  const start = weekStart(state.day);
+  let series;
+  try {
+    series = (await api(`stats?days=7&end=${shiftDay(start, 6)}`)).series;
+  } catch {
+    return;
+  }
+  const goal = targets(state.profile).kcal, today = isoDay(new Date());
+  $("#weekStrip").innerHTML = series.map((d) => {
+    const past = d.day < today;
+    const cls = !d.n ? "" : d.kcal > goal * 1.1 ? "over" : past && d.kcal < goal * 0.9 ? "under" : "ok";
+    const wd = new Date(d.day + "T12:00:00").toLocaleDateString(I18N[LANG].locale, { weekday: "narrow" });
+    return `<button class="wday ${cls}${d.day === state.day ? " sel" : ""}${d.day === today ? " today" : ""}" data-day="${d.day}" aria-label="${d.day}">
+      <span>${wd}</span><i style="--p:${Math.min(100, (d.kcal / goal) * 100 || 0)}%"></i><b>${+d.day.slice(8)}</b>
+    </button>`;
+  }).join("");
+}
+
+$("#weekStrip").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-day]");
+  if (b && b.dataset.day !== state.day) setDay(b.dataset.day);
+});
+
+/* ---- voda ---- */
+
+// približno 33 ml na kg telesne mase, zaokroženo na kozarec
+const waterGoal = () => Math.max(1500, Math.round((+state.profile.weight_kg * 33) / 250) * 250);
+
+function renderWater() {
+  const ml = state.water[state.day] || 0, goal = waterGoal();
+  $("#waterCard").innerHTML = `
+    <span class="water-ico">${icon("drop")}</span>
+    <div class="water-main">
+      <div class="water-top"><b>${t("water.title")}</b><span>${fmt(ml)} <small>/ ${fmt(goal)} ml</small></span></div>
+      <div class="water-bar"><i style="width:${Math.min(100, (ml / goal) * 100)}%"></i></div>
+    </div>
+    <button class="water-btn minus" data-water="-250" aria-label="−250 ml" ${ml ? "" : "disabled"}>−</button>
+    <button class="water-btn" data-water="250" aria-label="+250 ml">+<small>250</small></button>`;
+}
+
+$("#waterCard").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-water]");
+  if (!b) return;
+  const ml = Math.max(0, (state.water[state.day] || 0) + +b.dataset.water);
+  if (ml) state.water[state.day] = ml;
+  else delete state.water[state.day];
+  renderWater();
+  buzz();
+  try {
+    await kvSet("water", state.water);
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
 
 function renderDetails(tg, s) {
   const lim = extraLimits(tg.kcal);
@@ -341,6 +424,23 @@ $("#healthCard").addEventListener("click", async (e) => {
 });
 
 $("#meals").addEventListener("click", async (e) => {
+  const tool = e.target.closest("[data-save-meal], [data-copy-meal]");
+  if (tool) {
+    const key = tool.dataset.saveMeal || tool.dataset.copyMeal;
+    const items = state.entries.filter((x) => mealOf(x.time).key === key).map(pick);
+    if (tool.dataset.copyMeal) {
+      state.day = isoDay(new Date());
+      await loadEntries();
+      return showPending(items, { source: "quick" });
+    }
+    const name = prompt(t("meal.saveName"), `${t("meal." + key)}: ${items.map((i) => i.name).join(", ")}`.slice(0, 60));
+    if (!name) return;
+    state.meals = [...state.meals, { id: Date.now().toString(36), name: name.trim().slice(0, 80), items }];
+    await kvSet("meals", state.meals).catch((err) => toast(err.message, true));
+    toast(t("meal.saved"));
+    buzz();
+    return;
+  }
   const id = e.target.closest("[data-del]")?.dataset.del;
   if (!id) {
     const edit = e.target.closest("[data-edit]")?.dataset.edit;
@@ -379,6 +479,8 @@ function scaleItem(it, grams) {
 function showPending(items, { note = "", source, image, health, healthNote } = {}) {
   const box = $("#pending");
   let current = items.map((it) => ({ ...it, _base: { ...it } }));
+  // Claudove ocene preveri: kalorije se morajo ujemati z makrohranili
+  const checked = source === "chat" || source === "photo";
 
   const render = () => {
     const sum = totals(current);
@@ -392,6 +494,7 @@ function showPending(items, { note = "", source, image, health, healthNote } = {
           <span class="unit-input"><input type="number" min="0" inputmode="numeric" value="${r0(it.grams)}" data-f="grams" aria-label="${t("pending.grams")}"><em>g</em></span>
           <button class="icon-btn" data-rm="${i}" aria-label="${t("pending.remove")}">${icon("x")}</button>
           <div class="meta">${metaLine(it)}</div>
+          ${checked && kcalMismatch(it) ? `<button class="warn-fix" data-fixk="${i}">⚠ ${t("check.kcal", { n: kcalMismatch(it) })}</button>` : ""}
         </div>`).join("")}
       <div class="pending-actions">
         <button class="btn ghost" data-cancel>${t("cancel")}</button>
@@ -410,12 +513,20 @@ function showPending(items, { note = "", source, image, health, healthNote } = {
     if (e.target.dataset.f === "grams") {
       current[i] = scaleItem(current[i], +e.target.value || 0);
       $(".meta", row).innerHTML = metaLine(current[i]);
+      const fixBtn = $(".warn-fix", row);
+      if (fixBtn) fixBtn.textContent = `⚠ ${t("check.kcal", { n: kcalMismatch(current[i]) ?? r0(macroKcal(current[i])) })}`;
       $("[data-ok]", box).textContent = t("addKcal", { kcal: r0(totals(current).kcal) });
     }
   };
   box.onclick = async (e) => {
     const rm = e.target.closest("[data-rm]");
-    if (rm) {
+    const fix = e.target.closest("[data-fixk]");
+    if (fix) {
+      const it = current[+fix.dataset.fixk];
+      it.kcal = macroKcal(it);
+      it._base.kcal = macroKcal(it._base);
+      render();
+    } else if (rm) {
       current.splice(+rm.dataset.rm, 1);
       render();
     } else if (e.target.hasAttribute("data-cancel")) {
@@ -456,6 +567,20 @@ function showLoading(msg) {
   $("#pending").innerHTML = `<div class="pending">${loadingHtml(msg)}</div>`;
 }
 
+// uporabnikova živila z znano maso → vrednosti na 100 g, da jih Claude uporabi dosledno
+function knownFoods(limit = 12) {
+  const seen = new Set(), out = [];
+  for (const it of [...favorites, ...frequent]) {
+    const key = it.name.toLowerCase();
+    if (!it.grams || !it.kcal || seen.has(key)) continue;
+    seen.add(key);
+    const f = 100 / it.grams;
+    out.push({ name: it.name, kcal: r0(it.kcal * f), protein: r1(it.protein * f), carbs: r1(it.carbs * f), fat: r1(it.fat * f) });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /* ---- chat vnos ---- */
 
 $("#chatForm").addEventListener("submit", async (e) => {
@@ -466,7 +591,8 @@ $("#chatForm").addEventListener("submit", async (e) => {
   input.blur(); // skrij tipkovnico na telefonu
   showLoading(t("loading.parse"));
   try {
-    const res = await api("ai/parse", { method: "POST", body: { text } });
+    hideSuggest();
+    const res = await api("ai/parse", { method: "POST", body: { text, known: knownFoods() } });
     input.value = "";
     showPending(res.items, { note: res.note, source: "chat", health: res.health, healthNote: res.health_note });
   } catch (err) {
@@ -475,14 +601,49 @@ $("#chatForm").addEventListener("submit", async (e) => {
   }
 });
 
+/* ---- predlogi med tipkanjem: brez Clauda ---- */
+
+let suggestions = [];
+function hideSuggest() {
+  suggestions = [];
+  $("#suggest").innerHTML = "";
+}
+
+function renderSuggest() {
+  const text = $("#chatInput").value;
+  suggestions = text.trim().length < 2 ? [] : searchFoods(text, [...favorites.map((f) => ({ ...f, fav: true })), ...foodHistory]);
+  const box = $("#suggest");
+  const wasEmpty = !box.innerHTML;
+  box.innerHTML = suggestions.map((sg, i) => `
+    <button type="button" data-sg="${i}">
+      <span class="sg-main"><b>${esc(sg.item.name)}</b>${sg.item.grams ? `<small> · ${r0(sg.item.grams)} g</small>` : ""}</span>
+      <span class="sg-sub">${r0(sg.item.kcal)} kcal · ${macroLine(sg.item)}</span>
+      <span class="sg-tag ${sg.own ? "own" : ""}">${sg.fav ? "★" : sg.own ? t("suggest.mine") : t("suggest.db")}</span>
+    </button>`).join("");
+  // na telefonu naj predlogi ne ostanejo skriti za tipkovnico
+  if (suggestions.length && wasEmpty && matchMedia("(max-width: 680px)").matches) $("#chatForm").scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+$("#chatInput").addEventListener("input", renderSuggest);
+$("#suggest").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-sg]");
+  if (!b) return;
+  const sg = suggestions[+b.dataset.sg];
+  $("#chatInput").value = "";
+  $("#chatInput").blur();
+  hideSuggest();
+  showPending([{ ...sg.item }], { source: sg.own ? "quick" : "db" });
+});
+
 /* ---- nedavna živila ---- */
 
-let frequent = [], favorites = [];
+let frequent = [], favorites = [], foodHistory = [];
 const pick = ({ name, grams, health, ...r }) => ({ name, grams, health: health || null, ...Object.fromEntries(NUTR.map((k) => [k, r[k] ?? null])) });
 
 async function loadRecent() {
   try {
-    [{ recent: frequent }, { favorites }] = await Promise.all([api("recent"), api("favorites")]);
+    [{ recent: foodHistory }, { favorites }] = await Promise.all([api("recent?limit=300"), api("favorites")]);
+    frequent = foodHistory.slice(0, 15);
   } catch {
     return;
   }
@@ -502,8 +663,26 @@ function quickRow(it, i, kind) {
   </li>`;
 }
 
+let prevMeals = []; // obroki prejšnjega dne: [{ key, items }]
+
+function mealRow(name, items, attr, removable) {
+  const tot = totals(items);
+  return `<li>
+    <button class="q-add" ${attr}>
+      <b>${esc(name)}</b>
+      <span class="muted small">${t("entries.count", { n: items.length })} · ${r0(tot.kcal)} kcal · ${macroLine(tot)}</span>
+    </button>
+    ${removable !== undefined ? `<button class="q-star" data-unmeal="${removable}" aria-label="${t("delete")}">✕</button>` : ""}
+  </li>`;
+}
+
 function renderQuick() {
+  const prevDay = shiftDay(state.day, -1);
   $("#quickOut").innerHTML = `
+    ${state.meals.length ? `<h4>${t("quick.meals")}</h4>
+      <ul class="quick-list">${state.meals.map((m, i) => mealRow(m.name, m.items, `data-meal="${i}"`, i)).join("")}</ul>` : ""}
+    ${prevMeals.length ? `<h4>${t("quick.prev", { day: dayLabel(prevDay) })}</h4>
+      <ul class="quick-list">${prevMeals.map((m, i) => mealRow(t("meal." + m.key), m.items, `data-prev="${i}"`)).join("")}</ul>` : ""}
     <h4>${t("quick.saved")}</h4>
     ${favorites.length ? `<ul class="quick-list">${favorites.map((f, i) => quickRow(f, i, "fav")).join("")}</ul>` : `<p class="muted small">${t("quick.noSaved")}</p>`}
     <h4>${t("quick.frequent")}</h4>
@@ -517,17 +696,33 @@ async function saveFavorite(it) {
   await loadRecent();
 }
 
-$("#quickBtn").onclick = () => {
+$("#quickBtn").onclick = async () => {
   renderQuick();
   $("#quickDialog").showModal();
   loadRecent();
+  try {
+    const { entries } = await api("entries?day=" + shiftDay(state.day, -1));
+    prevMeals = MEALS.map((m) => ({ key: m.key, items: entries.filter((x) => mealOf(x.time).key === m.key).map(pick) })).filter((m) => m.items.length);
+  } catch {
+    prevMeals = [];
+  }
+  renderQuick();
 };
 
 $("#quickOut").addEventListener("click", async (e) => {
   const b = e.target.closest("button");
   if (!b) return;
   try {
-    if (b.dataset.fav !== undefined || b.dataset.freq !== undefined) {
+    if (b.dataset.meal !== undefined || b.dataset.prev !== undefined) {
+      const items = b.dataset.meal !== undefined ? state.meals[b.dataset.meal].items : prevMeals[b.dataset.prev].items;
+      $("#quickDialog").close();
+      showPending(items.map((it) => ({ ...it })), { source: "quick" });
+    } else if (b.dataset.unmeal !== undefined) {
+      if (!confirm(t("meal.confirmDelete", { name: state.meals[b.dataset.unmeal].name }))) return;
+      state.meals = state.meals.filter((_, i) => i !== +b.dataset.unmeal);
+      await kvSet("meals", state.meals);
+      renderQuick();
+    } else if (b.dataset.fav !== undefined || b.dataset.freq !== undefined) {
       const it = b.dataset.fav !== undefined ? favorites[b.dataset.fav] : frequent[b.dataset.freq];
       $("#quickDialog").close();
       showPending([pick(it)], { source: "quick" });
@@ -549,6 +744,7 @@ function openEntryEditor(id) {
   const e = state.entries.find((x) => x.id === id);
   if (!e) return;
   const d = $("#entryDialog");
+  $("h3", d).textContent = t("entry.edit");
   const hasGrams = !!e.grams;
   let cur = { ...e };
   const out = $("#entryOut");
@@ -610,6 +806,72 @@ function openEntryEditor(id) {
   d.showModal();
 }
 
+/* ---- ročni vnos: vrednosti z deklaracije na 100 g ---- */
+
+function openManualEntry() {
+  const d = $("#entryDialog");
+  $("h3", d).textContent = t("manual.title");
+  const num = (name, label, unit, req = false) => `<label><span>${label}</span>
+    <span class="unit-input"><input type="number" name="${name}" min="0" step="any" inputmode="decimal" ${req ? "required" : ""}><em>${unit}</em></span></label>`;
+  $("#entryOut").innerHTML = `
+    <form class="form" id="manualForm">
+      <label><span>${t("pending.name")}</span><input name="name" required maxlength="120" autocomplete="off"></label>
+      <p class="opt-label">${t("manual.per100")}</p>
+      <div class="grid4">
+        ${num("kcal", "kcal", "", true)}${num("protein", t("macro.protein"), "g")}${num("carbs", t("macro.carbs"), "g")}${num("fat", t("macro.fat"), "g")}
+      </div>
+      <details>
+        <summary>${t("manual.more")}</summary>
+        <div class="grid4">
+          ${num("sat_fat", t("nutr.sat_fat"), "g")}${num("sugar", t("nutr.sugar"), "g")}${num("fiber", t("nutr.fiber"), "g")}${num("salt", t("nutr.salt"), "g")}
+        </div>
+      </details>
+      <label><span>${t("manual.amount")}</span><span class="unit-input"><input type="number" name="grams" min="1" step="any" inputmode="decimal" value="100" required><em>g / ml</em></span></label>
+      <div class="macro-pills" id="manualCalc"></div>
+      <button type="button" class="warn-fix" id="manualFix" hidden></button>
+      <label class="check"><input type="checkbox" name="fav"> <span>${t("quick.save")}</span></label>
+      <button class="btn primary full" type="submit">${t("add")}</button>
+    </form>`;
+  const f = $("#manualForm");
+  const read = () => {
+    const g = +f.grams.value || 0;
+    const it = { name: f.name.value.trim(), grams: g, health: null };
+    for (const k of NUTR) it[k] = f[k].value === "" ? (EXTRAS.includes(k) ? null : 0) : (+f[k].value * g) / 100;
+    return it;
+  };
+  const show = () => {
+    const it = read();
+    $("#manualCalc").innerHTML = `<span class="k">${r0(it.kcal)} kcal</span><span class="p">${t("macro.p")} ${r1(it.protein)} g</span><span class="c">${t("macro.c")} ${r1(it.carbs)} g</span><span class="f">${t("macro.f")} ${r1(it.fat)} g</span>`;
+    // opozori na tipkarsko napako: kalorije naj se ujemajo z makrohranili
+    const per100 = Object.fromEntries(NUTR.map((k) => [k, +f[k].value || 0]));
+    const calc = f.kcal.value && (per100.protein || per100.carbs || per100.fat) ? kcalMismatch({ name: it.name, ...per100 }) : null;
+    $("#manualFix").hidden = calc === null;
+    $("#manualFix").textContent = calc === null ? "" : `⚠ ${t("check.kcal", { n: calc })}`;
+    $("#manualFix").dataset.kcal = calc ?? "";
+  };
+  show();
+  f.oninput = show;
+  $("#manualFix").onclick = () => {
+    f.kcal.value = $("#manualFix").dataset.kcal;
+    show();
+  };
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const it = read();
+    try {
+      await addEntries([it], "manual");
+      if (f.fav.checked) await saveFavorite(it);
+      d.close();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+  d.showModal();
+  f.name.focus();
+}
+
+$("#manualBtn").onclick = openManualEntry;
+
 /* ---- slike ---- */
 
 function readImage(file, maxSide = 1280) {
@@ -638,7 +900,7 @@ $("#photoInput").addEventListener("change", async (e) => {
   try {
     const { dataUrl, base64 } = await readImage(file);
     showLoading(t("loading.photo"));
-    const res = await api("ai/photo", { method: "POST", body: { image: base64, media_type: "image/jpeg", note } });
+    const res = await api("ai/photo", { method: "POST", body: { image: base64, media_type: "image/jpeg", note, known: knownFoods(8) } });
     if (note) $("#chatInput").value = "";
     showPending(res.items, { note: res.note, source: "photo", image: dataUrl, health: res.health, healthNote: res.health_note });
   } catch (err) {
@@ -688,6 +950,7 @@ $("#barcodeInput").addEventListener("change", async (e) => {
   const file = e.target.files[0];
   e.target.value = "";
   if (!file) return;
+  stopScanner();
   openBarcodeDialog();
   $("#productOut").innerHTML = loadingHtml(t("loading.barcode"));
   try {
@@ -704,12 +967,50 @@ $("#barcodeInput").addEventListener("change", async (e) => {
   }
 });
 
-$("#manualCodeBtn").onclick = () => {
+/* skener v živo: kamera bere kodo sproti, brez fotografiranja */
+let scanStream = null;
+
+function stopScanner() {
+  scanStream?.getTracks().forEach((tr) => tr.stop());
+  scanStream = null;
+  $("#scanBox").hidden = true;
+}
+
+async function startScanner() {
   openBarcodeDialog();
   $("#productOut").innerHTML = "";
   $("#codeInput").value = "";
-  $("#codeInput").focus();
-};
+  if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) return $("#barcodeInput").click();
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false });
+  } catch {
+    $("#productOut").innerHTML = `<p class="muted small">${t("scan.denied")}</p>`;
+    return;
+  }
+  const video = $("#scanVideo");
+  video.srcObject = scanStream;
+  $("#scanBox").hidden = false;
+  await video.play().catch(() => {});
+  const det = new BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+  const tick = async () => {
+    if (!scanStream) return;
+    try {
+      const found = await det.detect(video);
+      if (found.length) {
+        stopScanner();
+        buzz();
+        $("#codeInput").value = found[0].rawValue;
+        return lookupProduct(found[0].rawValue);
+      }
+    } catch {}
+    setTimeout(tick, 160);
+  };
+  tick();
+}
+
+$("#scanBtn").onclick = startScanner;
+$("#barcodeDialog").addEventListener("close", stopScanner);
+document.addEventListener("visibilitychange", () => document.hidden && stopScanner());
 
 function openBarcodeDialog() {
   const d = $("#barcodeDialog");
@@ -718,6 +1019,7 @@ function openBarcodeDialog() {
 
 $("#codeForm").addEventListener("submit", (e) => {
   e.preventDefault();
+  stopScanner();
   $("#codeInput").blur();
   lookupProduct($("#codeInput").value.trim());
 });
@@ -1109,10 +1411,123 @@ async function loadStats() {
         `<div><div class="l ${c}">${t("macro." + k)}</div><b>${r0(v)} g</b><div class="t">${t("stats.goal", { g: r0(goal) })} · ${r0((kk / ksum) * 100)} %</div></div>`).join("")}
     </div>` : `<div class="chart-empty">${t("stats.noData")}</div>`;
 
-  $("#weightChart").innerHTML = lineChart(w, chartWidth("#weightChart"));
+  const goalKg = +state.profile.goal_weight || null;
+  $("#weightChart").innerHTML = lineChart(w, chartWidth("#weightChart"), goalKg);
+  $("#weightInfo").innerHTML = weightOutlook(w, goalKg);
+  renderQuality(data.series, logged, tg);
+
+  // izmerjena poraba: zadnjih 5 tednov do včeraj (današnji dan še ni popoln)
+  try {
+    const base = await api(`stats?days=35&end=${shiftDay(isoDay(new Date()), -1)}`);
+    renderTdee(measuredTdee(base.series, base.weights, tg.bmr), tg);
+  } catch {}
+
   $("#topFoods").innerHTML = data.top.length
     ? data.top.map((f) => `<li>${esc(f.name)} <span>${f.n}× · ${r0(f.kcal)} kcal</span></li>`).join("")
     : `<li class="muted">${t("stats.noData")}</li>`;
+}
+
+const signed = (n, digits = 1) => (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(n).toLocaleString(I18N[LANG].locale, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+const dayNum = (day) => Date.parse(day + "T12:00:00") / 864e5;
+
+// naklon premice skozi tehtanja (kg na dan) – bolj zanesljiv kot razlika prvega in zadnjega
+function weightSlope(weights) {
+  if (weights.length < 2) return null;
+  const xs = weights.map((w) => dayNum(w.day)), ys = weights.map((w) => w.kg);
+  const mx = xs.reduce((a, b) => a + b) / xs.length, my = ys.reduce((a, b) => a + b) / ys.length;
+  const den = xs.reduce((a, x) => a + (x - mx) ** 2, 0);
+  return den ? xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / den : null;
+}
+
+/* Dejanska dnevna poraba iz podatkov: povprečen vnos − sprememba teže × 7700 kcal/kg.
+   Upošteva samo popolno vpisane dni, sicer bi manjkajoči vnosi porabo podcenili. */
+function measuredTdee(series, weights, bmr) {
+  const full = series.filter((d) => d.n > 0 && d.kcal >= bmr * 0.5);
+  const span = weights.length > 1 ? dayNum(weights[weights.length - 1].day) - dayNum(weights[0].day) : 0;
+  if (full.length < 10 || weights.length < 4 || span < 10) return { ready: false, days: full.length, weighs: weights.length };
+  const slope = weightSlope(weights);
+  const intake = full.reduce((a, d) => a + d.kcal, 0) / full.length;
+  const tdee = intake - slope * 7700;
+  return { ready: true, tdee, intake, slope, days: full.length, weighs: weights.length, plausible: tdee > bmr * 0.9 && tdee < bmr * 2.8 };
+}
+
+function renderTdee(m, tg) {
+  const box = $("#tdeeCard"), over = +state.profile.tdee_override || null;
+  const head = `<h3>${t("tdee.title")}</h3>`;
+  if (!m.ready) {
+    box.innerHTML = `${head}<p class="muted small">${t("tdee.need", { days: m.days, weighs: m.weighs })}</p>
+      <div class="tdee-progress"><i style="width:${Math.min(100, (m.days / 10) * 50 + (Math.min(4, m.weighs) / 4) * 50)}%"></i></div>
+      ${over ? `<button class="btn ghost sm" data-tdee="">${t("tdee.reset")}</button>` : ""}`;
+    return;
+  }
+  const val = Math.round(m.tdee / 10) * 10;
+  box.innerHTML = `${head}
+    <div class="tdee-row">
+      <div><span class="lbl">${t("tdee.measured")}</span><b>${fmt(val)} <small>kcal</small></b></div>
+      <div><span class="lbl">${t("tdee.formula")}</span><b>${fmt(tg.formulaTdee)} <small>kcal</small></b></div>
+      <div><span class="lbl">${t("tdee.trend")}</span><b>${signed(m.slope * 7, 2)} <small>kg/${t("tdee.week")}</small></b></div>
+    </div>
+    <p class="muted small">${t("tdee.info", { days: m.days, weighs: m.weighs, intake: fmt(m.intake) })}</p>
+    ${!m.plausible ? `<p class="small warn-text">${t("tdee.implausible")}</p>` : `
+    <div class="btn-row">
+      ${over === val ? `<span class="muted small">✓ ${t("tdee.using")}</span>` : `<button class="btn soft sm" data-tdee="${val}">${t(over ? "tdee.update" : "tdee.apply")}</button>`}
+      ${over ? `<button class="btn ghost sm" data-tdee="">${t("tdee.reset")}</button>` : ""}
+    </div>`}`;
+}
+
+$("#tdeeCard").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-tdee]");
+  if (!b) return;
+  try {
+    const res = await api("profile", { method: "PUT", body: { ...state.profile, tdee_override: +b.dataset.tdee || null, today: isoDay(new Date()) } });
+    state.profile = res.profile;
+    toast(t(b.dataset.tdee ? "tdee.applied" : "tdee.resetDone", { n: fmt(targets(state.profile).kcal) }));
+    renderToday();
+    loadStats();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+// kdaj bo pri sedanjem tempu dosežena ciljna teža
+function weightOutlook(w, goal) {
+  if (w.length < 3 || dayNum(w[w.length - 1].day) - dayNum(w[0].day) < 7) return "";
+  const slope = weightSlope(w), cur = w[w.length - 1].kg;
+  let out = t("weight.pace", { n: signed(slope * 7, 2) });
+  if (goal && Math.abs(goal - cur) >= 0.3) {
+    const days = (goal - cur) / slope;
+    if (isFinite(days) && days > 0 && days < 730) {
+      const eta = new Date(Date.now() + days * 864e5).toLocaleDateString(I18N[LANG].locale, { day: "numeric", month: "long", year: "numeric" });
+      out += " " + t("weight.eta", { goal: goal.toLocaleString(I18N[LANG].locale), date: eta });
+    } else {
+      out += " " + t("weight.away", { goal: goal.toLocaleString(I18N[LANG].locale) });
+    }
+  }
+  return out;
+}
+
+// kakovost prehrane: ocena zdravja po dnevih, povprečja dodatnih hranil, voda
+function renderQuality(series, logged, tg) {
+  const rated = series.filter((d) => d.health);
+  if (!logged.length) return ($("#qualityCard").innerHTML = `<div class="chart-empty">${t("stats.noData")}</div>`);
+  const avgH = rated.length ? rated.reduce((a, d) => a + d.health, 0) / rated.length : null;
+  const lim = extraLimits(tg.kcal);
+  const waterDays = series.map((d) => state.water[d.day] || 0).filter(Boolean);
+  $("#qualityCard").innerHTML = `
+    <div class="health-score">
+      ${avgH ? healthBadge(avgH, "lg") : `<span class="hs lg none">–</span>`}
+      <div><b>${t("quality.avg")}</b><small>${rated.length ? t("quality.days", { n: rated.length }) : t("health.none")}</small></div>
+    </div>
+    ${rated.length > 1 ? `<div class="hbars">${series.map((d) => `<i class="${!d.health ? "" : d.health >= 7 ? "good" : d.health >= 5 ? "mid" : "bad"}" style="height:${d.health ? d.health * 10 : 4}%" title="${d.day}: ${d.health ?? "–"}"></i>`).join("")}</div>` : ""}
+    <div class="nutr-grid">${EXTRAS.map((k) => {
+      const v = logged.reduce((a, d) => a + (d[k] || 0), 0) / logged.length, l = lim[k], goal = l.max ?? l.min;
+      return `<div class="nutr ${l.max && v > l.max ? "bad" : ""} ${l.min && v >= l.min ? "good" : ""}">
+        <span class="lbl">${t("nutr." + k)}</span><b>${r1(v)}<small> g</small></b>
+        <span class="lim">${t(l.max ? "nutr.max" : "nutr.min", { n: r0(goal) })}</span>
+        <i style="--p:${Math.min(100, (v / goal) * 100 || 0)}%"></i>
+      </div>`;
+    }).join("")}</div>
+    ${waterDays.length ? `<p class="muted small water-avg">${icon("drop")} ${t("quality.water", { n: fmt(waterDays.reduce((a, b) => a + b, 0) / waterDays.length), goal: fmt(waterGoal()) })}</p>` : ""}`;
 }
 
 // širina v px, da je besedilo v grafih enako veliko na telefonu in računalniku
@@ -1133,7 +1548,7 @@ function barChart(series, target, W) {
     const over = d.kcal > target * 1.1, under = d.kcal < target * 0.9;
     const color = over ? "url(#gFat)" : under ? "url(#gCarbs)" : "url(#gAccent)";
     const h = Math.max(d.n ? 3 : 0, y(0) - y(d.kcal));
-    s += `<rect x="${x}" y="${pt}" width="${w}" height="${y(0) - pt}" rx="${Math.min(6, w / 2)}" fill="rgba(255,255,255,.035)"/>`;
+    s += `<rect x="${x}" y="${pt}" width="${w}" height="${y(0) - pt}" rx="${Math.min(6, w / 2)}" class="bar-bg"/>`;
     if (d.n) s += `<rect x="${x}" y="${y(0) - h}" width="${w}" height="${h}" rx="${Math.min(6, w / 2)}" fill="${color}"><title>${d.day}: ${r0(d.kcal)} kcal</title></rect>`;
     if (i % every === 0) s += `<text x="${x + w / 2}" y="${H - 5}" text-anchor="middle">${shortDate(d.day)}</text>`;
   });
@@ -1141,22 +1556,29 @@ function barChart(series, target, W) {
   return s + "</svg>";
 }
 
-function lineChart(points, W) {
+function lineChart(points, W, goal = null) {
   if (points.length < 2) return `<div class="chart-empty">${t("stats.needWeights")}</div>`;
   const H = 180, pl = 38, pb = 20, pt = 10;
   const vals = points.map((p) => p.kg);
-  const lo = Math.floor(Math.min(...vals) - 1), hi = Math.ceil(Math.max(...vals) + 1);
-  const t0 = new Date(points[0].day).getTime(), t1 = new Date(points[points.length - 1].day).getTime() || t0 + 1;
-  const x = (d) => pl + (W - pl - 8) * ((new Date(d).getTime() - t0) / (t1 - t0 || 1));
+  // ciljna teža je na grafu, če ni predaleč od trenutnih vrednosti
+  const showGoal = goal && Math.abs(goal - vals[vals.length - 1]) < 15;
+  const all = showGoal ? [...vals, goal] : vals;
+  const lo = Math.floor(Math.min(...all) - 1), hi = Math.ceil(Math.max(...all) + 1);
+  const t0 = dayNum(points[0].day), t1 = dayNum(points[points.length - 1].day);
+  const x = (d) => pl + (W - pl - 8) * ((dayNum(d) - t0) / (t1 - t0 || 1));
   const y = (v) => pt + (H - pt - pb) * (1 - (v - lo) / (hi - lo));
+  // zglajen trend (eksponentno povprečje) skrije dnevna nihanja zaradi vode
+  let ema = points[0].kg;
+  const trend = points.map((p) => (ema += 0.35 * (p.kg - ema)));
   let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${t("stats.weight")}">`;
   [lo, (lo + hi) / 2, hi].forEach((v) => (s += `<line class="grid" x1="${pl}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text x="${pl - 4}" y="${y(v) + 3}" text-anchor="end">${r1(v)}</text>`));
-  const path = points.map((p, i) => `${i ? "L" : "M"}${x(p.day)},${y(p.kg)}`).join(" ");
+  if (showGoal) s += `<line class="target" x1="${pl}" x2="${W}" y1="${y(goal)}" y2="${y(goal)}"/><text x="${W - 8}" y="${y(goal) - 5}" text-anchor="end">${t("weight.goal")} ${r1(goal)}</text>`;
+  const path = points.map((p, i) => `${i ? "L" : "M"}${x(p.day)},${y(trend[i])}`).join(" ");
   const area = `${path} L${x(points[points.length - 1].day)},${y(lo)} L${x(points[0].day)},${y(lo)} Z`;
-  s += `<defs><linearGradient id="wArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9d8cf5" stop-opacity=".28"/><stop offset="1" stop-color="#9d8cf5" stop-opacity="0"/></linearGradient></defs>`;
+  s += `<defs><linearGradient id="wArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--accent);stop-opacity:.28"/><stop offset="1" style="stop-color:var(--accent);stop-opacity:0"/></linearGradient></defs>`;
   s += `<path d="${area}" fill="url(#wArea)"/>`;
   s += `<path d="${path}" fill="none" stroke="url(#gAccent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
-  points.forEach((p) => (s += `<circle cx="${x(p.day)}" cy="${y(p.kg)}" r="4" fill="#242428" stroke="#9d8cf5" stroke-width="2"><title>${p.day}: ${p.kg} kg</title></circle>`));
+  points.forEach((p) => (s += `<circle class="wdot" cx="${x(p.day)}" cy="${y(p.kg)}" r="3.5"><title>${p.day}: ${p.kg} kg</title></circle>`));
   const first = points[0].day, last = points[points.length - 1].day;
   s += `<text x="${pl}" y="${H - 5}">${shortDate(first)}</text><text x="${W - 8}" y="${H - 5}" text-anchor="end">${shortDate(last)}</text>`;
   return s + "</svg>";
@@ -1172,6 +1594,7 @@ function readForm() {
   for (const [k, v] of fd.entries()) p[k] = v;
   for (const k of ["age", "height_cm", "weight_kg", "activity", "rate", "protein_per_kg", "fat_pct"]) p[k] = +p[k];
   p.custom_kcal = p.custom_kcal ? +p.custom_kcal : null;
+  p.goal_weight = p.goal_weight ? +p.goal_weight : null;
   return p;
 }
 
@@ -1241,7 +1664,7 @@ function renderCalc() {
     <div class="calc-top"><div class="l">${t("profile.dailyTarget")}</div><div class="v">${fmt(tg.kcal)} <small>kcal</small></div></div>
     <div class="calc-rows">
       ${row(t("profile.bmr"), kc(tg.bmr))}
-      ${row(t("profile.tdee"), kc(tg.tdee))}
+      ${row(t(p.tdee_override ? "profile.tdeeMeasured" : "profile.tdee"), kc(tg.tdee))}
       ${p.goal !== "maintain" && !p.custom_kcal ? row(t(p.goal === "cut" ? "profile.deficit" : "profile.surplus"), (tg.delta > 0 ? "+" : "−") + kc(Math.abs(tg.delta))) : ""}
     </div>
     <div class="calc-macros">
@@ -1270,6 +1693,26 @@ async function loadProfile() {
   state.profile = profile;
   return configured;
 }
+
+/* ---- videz: temna, svetla ali po sistemu ---- */
+
+function applyTheme(mode) {
+  const light = mode === "light" || (mode === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  $('meta[name="theme-color"]').content = light ? "#f4f3f9" : "#1b1b1f";
+  $$("#themeSeg button").forEach((b) => b.classList.toggle("active", b.dataset.theme === mode));
+}
+let themeMode = "dark";
+try { themeMode = localStorage.getItem("mt_theme") || "dark"; } catch {}
+applyTheme(themeMode);
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => applyTheme(themeMode));
+$("#themeSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-theme]");
+  if (!b) return;
+  themeMode = b.dataset.theme;
+  try { localStorage.setItem("mt_theme", themeMode); } catch {}
+  applyTheme(themeMode);
+});
 
 /* ---------------------------------------------------------------- prijava */
 
@@ -1346,6 +1789,7 @@ async function syncCheck() {
     if (state.version && version !== state.version) {
       state.version = version;
       await loadProfile();
+      await loadExtras();
       await loadEntries();
       loadRecent();
       loadSavedRecipes();
@@ -1359,7 +1803,7 @@ async function syncCheck() {
   }
 }
 
-setInterval(() => { if (!document.hidden) syncCheck(); }, 8000);
+if (!window.MT_LOCAL) setInterval(() => { if (!document.hidden) syncCheck(); }, 8000);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     // če je aplikacija ostala odprta čez polnoč, skoči na nov dan
@@ -1369,6 +1813,40 @@ document.addEventListener("visibilitychange", () => {
     syncCheck();
   }
 });
+
+/* ---------------------------------------------------------------- odgovor prek »Deli« */
+
+// Macrotractor je v meniju za deljenje: Claudov odgovor lahko deliš neposredno vanj
+async function handleSharedAnswer() {
+  if (!window.mtParseAny) return;
+  const q = new URLSearchParams(location.search);
+  const text = [q.get("text"), q.get("title"), q.get("url")].filter(Boolean).join("\n");
+  if (!text) return;
+  history.replaceState(null, "", location.pathname);
+  let pending = {};
+  try {
+    pending = JSON.parse(localStorage.getItem("mt_pending")) || {};
+    localStorage.removeItem("mt_pending");
+  } catch {}
+  const got = mtParseAny(text);
+  if (!got) return toast(t("local.bad"), true);
+  if (pending.day && pending.day !== state.day) {
+    state.day = pending.day;
+    await loadEntries();
+  }
+  const r = got.res;
+  if (got.kind === "items") {
+    showPending(r.items, { note: r.note, source: "chat", health: r.health, healthNote: r.health_note });
+  } else if (got.kind === "recipe") {
+    $("#recipeBtn").click();
+    showRecipe($("#recipeOut"), r, {});
+  } else {
+    await api("ratings", { method: "PUT", body: { day: state.day, score: r.score, comment: r.comment } });
+    state.rating = { score: r.score, comment: r.comment };
+    renderToday();
+    $("#healthCard").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
 
 /* ---------------------------------------------------------------- zagon */
 
@@ -1384,8 +1862,10 @@ async function boot() {
 
     const configured = await loadProfile();
     state._lastToday = isoDay(new Date());
+    await loadExtras();
     await loadEntries();
-    loadRecent();
+    await loadRecent();
+    if (configured) handleSharedAnswer();
     if (!configured) {
       showView("profile");
       toast(t("profile.setupFirst"));

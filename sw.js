@@ -1,8 +1,8 @@
 // Predpomni lupino aplikacije; API klici gredo vedno na strežnik.
 // Poti so relativne, da aplikacija deluje tudi v podmapi (npr. GitHub Pages).
 // build_standalone.py ime zamenja z oznako gradnje – vsaka objava je nov service worker
-const CACHE = "macrotractor-c14af59-202611081742";
-const SHELL = ["./", "index.html", "app.css", "app.js", "i18n.js", "local.js", "config.js", "manifest.json", "icons/icon-192.png", "icons/favicon-48.png"];
+const CACHE = "macrotractor-62e4852-202611141030";
+const SHELL = ["./", "index.html", "app.css", "app.js", "i18n.js", "foods.js", "local.js", "config.js", "manifest.json", "icons/icon-192.png", "icons/favicon-48.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })))));
@@ -11,7 +11,7 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k.startsWith("macrotractor-")).map((k) => caches.delete(k))))
   );
   self.clients.claim();
 });
