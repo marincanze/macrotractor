@@ -337,7 +337,19 @@ $("#weekStrip").addEventListener("click", (e) => {
 // približno 33 ml na kg telesne mase, zaokroženo na kozarec
 const waterGoal = () => Math.max(1500, Math.round((+state.profile.weight_kg * 33) / 250) * 250);
 
+// števec vode je izbiren: vklopi se v Profil → Videz in možnosti (nastavitev velja za to napravo)
+let waterOn = false;
+try { waterOn = localStorage.getItem("mt_water") === "1"; } catch {}
+$("#waterToggle").checked = waterOn;
+$("#waterToggle").onchange = (e) => {
+  waterOn = e.target.checked;
+  try { localStorage.setItem("mt_water", waterOn ? "1" : "0"); } catch {}
+  if (state.profile) renderWater();
+};
+
 function renderWater() {
+  $("#waterCard").hidden = !waterOn;
+  if (!waterOn) return;
   const ml = state.water[state.day] || 0, goal = waterGoal();
   $("#waterCard").innerHTML = `
     <span class="water-ico">${icon("drop")}</span>
@@ -634,6 +646,47 @@ $("#suggest").addEventListener("click", (e) => {
   hideSuggest();
   showPending([{ ...sg.item }], { source: sg.own ? "quick" : "db" });
 });
+
+/* ---- narekovanje: povej, kaj si pojedel ---- */
+
+(() => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const btn = $("#micBtn"), input = $("#chatInput");
+  if (!SR) return (btn.hidden = true);
+  let rec = null;
+  btn.onclick = () => {
+    if (rec) return rec.stop();
+    // nov govor se doda k že vpisanemu besedilu
+    const before = input.value.trim();
+    rec = new SR();
+    rec.lang = LANG === "en" ? "en-US" : "sl-SI";
+    rec.interimResults = true;
+    rec.onresult = (e) => {
+      const said = [...e.results].map((r) => r[0].transcript).join(" ").trim();
+      input.value = (before ? before + " " : "") + said;
+    };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") toast(t("mic.denied"), true);
+      else if (e.error === "language-not-supported") toast(t("mic.lang"), true);
+      else if (e.error !== "no-speech" && e.error !== "aborted") toast(t("mic.error"), true);
+    };
+    rec.onend = () => {
+      rec = null;
+      btn.classList.remove("on");
+      input.placeholder = t("chat.placeholder");
+      renderSuggest();
+    };
+    try {
+      rec.start();
+      btn.classList.add("on");
+      input.placeholder = t("mic.listening");
+      buzz();
+    } catch {
+      rec = null;
+      toast(t("mic.error"), true);
+    }
+  };
+})();
 
 /* ---- nedavna živila ---- */
 
@@ -1512,7 +1565,7 @@ function renderQuality(series, logged, tg) {
   if (!logged.length) return ($("#qualityCard").innerHTML = `<div class="chart-empty">${t("stats.noData")}</div>`);
   const avgH = rated.length ? rated.reduce((a, d) => a + d.health, 0) / rated.length : null;
   const lim = extraLimits(tg.kcal);
-  const waterDays = series.map((d) => state.water[d.day] || 0).filter(Boolean);
+  const waterDays = waterOn ? series.map((d) => state.water[d.day] || 0).filter(Boolean) : [];
   $("#qualityCard").innerHTML = `
     <div class="health-score">
       ${avgH ? healthBadge(avgH, "lg") : `<span class="hs lg none">–</span>`}

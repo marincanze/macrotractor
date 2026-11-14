@@ -59,6 +59,7 @@
     <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol>
     <symbol id="i-scale" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8.5 9.5a5 5 0 0 1 7 0L12 12z"/></symbol>
     <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
     <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3c3.5 4.2 6 7.3 6 10.5a6 6 0 0 1-12 0C6 10.3 8.5 7.2 12 3z"/></symbol>
     <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5M4 20v-4.5h4.5"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></symbol>
@@ -122,6 +123,7 @@
         <form id="chatForm" class="chat-form" autocomplete="off">
           <svg class="chat-ico"><use href="#i-sparkle"/></svg>
           <input id="chatInput" data-i18n-ph="chat.placeholder" maxlength="2000" enterkeyhint="send">
+          <button class="mic-btn" type="button" id="micBtn" data-i18n-aria="mic.start" data-i18n-title="mic.start"><svg><use href="#i-mic"/></svg></button>
           <button class="send-btn" type="submit" data-i18n-aria="chat.send"><svg><use href="#i-send"/></svg></button>
         </form>
         <div class="suggest" id="suggest"></div>
@@ -227,6 +229,7 @@
           <button type="button" data-theme="light" data-i18n="theme.light"></button>
           <button type="button" data-theme="auto" data-i18n="theme.auto"></button>
         </div>
+        <label class="check opt-check"><input type="checkbox" id="waterToggle"> <span data-i18n="opt.water"></span></label>
       </div>
 
       <form id="profileForm" class="form">

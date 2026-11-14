@@ -1,7 +1,7 @@
 // Predpomni lupino aplikacije; API klici gredo vedno na strežnik.
 // Poti so relativne, da aplikacija deluje tudi v podmapi (npr. GitHub Pages).
 // build_standalone.py ime zamenja z oznako gradnje – vsaka objava je nov service worker
-const CACHE = "macrotractor-62e4852-202611141030";
+const CACHE = "macrotractor-425e08f-202611141045";
 const SHELL = ["./", "index.html", "app.css", "app.js", "i18n.js", "foods.js", "local.js", "config.js", "manifest.json", "icons/icon-192.png", "icons/favicon-48.png"];
 
 self.addEventListener("install", (e) => {
