@@ -303,9 +303,18 @@ summary { cursor: pointer; color: var(--muted); font-weight: 500; font-size: .9r
   transition: border-color .2s, box-shadow .2s;
 }
 .chat-form:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 4px var(--accent-soft); }
-.chat-ico { position: absolute; left: 16px; color: var(--accent); width: 19px; height: 19px; }
-.chat-form input { flex: 1; min-width: 0; border: 0; background: none; padding: 10px 0; box-shadow: none; font-size: .98rem; }
-.chat-form input:focus { box-shadow: none; }
+.chat-ico { position: absolute; left: 16px; top: 16px; color: var(--accent); width: 19px; height: 19px; }
+.chat-form textarea {
+  flex: 1; min-width: 0; min-height: 0; border: 0; background: none; padding: 10px 0; box-shadow: none; border-radius: 0;
+  font-size: .98rem; line-height: 1.45; resize: none; overflow-y: auto;
+  /* največ 8 vrstic, nato se drsi znotraj polja */
+  max-height: calc(1.45em * 8 + 20px);
+}
+.chat-form textarea:focus { box-shadow: none; }
+.chat-form textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* gumba ostaneta spodaj, ko polje zraste */
+.chat-form { align-items: flex-end; }
+.chat-form.multi { border-radius: 26px; }
 .send-btn {
   display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; border: 0; cursor: pointer; flex: none;
   background: var(--accent-strong); color: var(--accent-ink); transition: transform .1s, background .2s;
@@ -494,7 +503,7 @@ summary { cursor: pointer; color: var(--muted); font-weight: 500; font-size: .9r
   position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom));
   transform: translateX(-50%) translateY(20px);
   background: var(--text); color: var(--bg); font-weight: 500; font-size: .9rem;
-  padding: 11px 18px; border-radius: 999px; opacity: 0; pointer-events: none;
+  padding: 11px 18px; border-radius: 16px; opacity: 0; pointer-events: none;
   transition: .3s cubic-bezier(.2, .9, .3, 1.15); max-width: calc(100vw - 32px); z-index: 50;
   box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
 }
@@ -549,7 +558,7 @@ summary { cursor: pointer; color: var(--muted); font-weight: 500; font-size: .9r
 
   .recipe-cta { margin-bottom: 10px; padding: 12px 14px; }
   .composer { padding: 10px; }
-  .chat-form input { font-size: 16px; } /* prepreči samodejno povečavo */
+  .chat-form textarea { font-size: 16px; } /* prepreči samodejno povečavo */
   input, select { font-size: 16px; }
   .action { min-height: 64px; }
   .entries li { padding: 13px 0; }
@@ -814,3 +823,18 @@ label.check input { width: 20px; height: 20px; accent-color: var(--accent); flex
 @keyframes mic-pulse { from { transform: scale(1); opacity: .8; } to { transform: scale(1.6); opacity: 0; } }
 .chat-form { gap: 4px; }
 label.opt-check { margin: 14px 0 0; }
+
+/* ---------------------------------------------------------------- obvestilo s seznamom (po dodajanju) */
+.toast.list {
+  display: flex; align-items: flex-start; gap: 12px; text-align: left;
+  width: min(360px, calc(100vw - 32px)); padding: 14px 16px; border-radius: 18px;
+}
+.toast-ico { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; flex: none; background: var(--accent-strong); color: var(--accent-ink); }
+.toast-ico svg { width: 18px; height: 18px; stroke-width: 2.6; }
+.toast-body { flex: 1; min-width: 0; }
+.toast-body b { display: block; font-weight: 600; margin-bottom: 4px; }
+.toast-body ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: .84rem; }
+.toast-body li { display: flex; justify-content: space-between; gap: 12px; }
+.toast-body li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast-body li em { font-style: normal; flex: none; opacity: .7; font-variant-numeric: tabular-nums; }
+.toast-body small { display: block; margin-top: 3px; color: inherit; opacity: .7; font-size: .78rem; }

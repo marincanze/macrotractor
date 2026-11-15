@@ -83,10 +83,29 @@ async function loadExtras() {
 function toast(msg, err = false) {
   const el = $("#toast");
   el.textContent = msg;
+  el.classList.remove("list");
   el.classList.toggle("err", err);
   el.classList.add("show");
   clearTimeout(toast._t);
   toast._t = setTimeout(() => el.classList.remove("show"), 3200);
+}
+
+// obvestilo po dodajanju: kartica s kljukico in seznamom zabeleženih živil
+function toastAdded(items) {
+  const el = $("#toast"), max = 6;
+  const kcal = items.reduce((s, i) => s + (+i.kcal || 0), 0);
+  el.innerHTML = `
+    <span class="toast-ico">${icon("check")}</span>
+    <div class="toast-body">
+      <b>${t("added.title")} · ${r0(kcal)} kcal</b>
+      <ul>${items.slice(0, max).map((i) => `<li><span>${esc(i.name)}${i.grams ? ` · ${r0(i.grams)} g` : ""}</span><em>${r0(i.kcal)} kcal</em></li>`).join("")}</ul>
+      ${items.length > max ? `<small>${t("added.more", { n: items.length - max })}</small>` : ""}
+    </div>`;
+  el.classList.remove("err");
+  el.classList.add("show", "list");
+  clearTimeout(toast._t);
+  // daljši seznam ostane viden dlje
+  toast._t = setTimeout(() => el.classList.remove("show"), 3200 + Math.min(items.length, max) * 500);
 }
 
 /* ---------------------------------------------------------------- izračun ciljev */
@@ -568,7 +587,7 @@ async function addEntries(items, source) {
   state.entries.push(...data.entries);
   renderToday();
   buzz();
-  toast(t("added", { names: items.map((i) => i.name).join(", ") }));
+  toastAdded(items);
   loadRecent();
 }
 
@@ -595,6 +614,28 @@ function knownFoods(limit = 12) {
 
 /* ---- chat vnos ---- */
 
+// polje raste z besedilom (do 8 vrstic, določa max-height v CSS), nato se drsi znotraj njega
+function growChat() {
+  const el = $("#chatInput");
+  el.style.height = "auto";
+  el.style.height = el.scrollHeight + "px";
+  // večvrstično polje ni več »tabletka«, ampak zaobljen pravokotnik
+  $("#chatForm").classList.toggle("multi", el.scrollHeight > 52);
+}
+// vsaka sprememba besedila iz kode (počisti, narekovanje) mora polje tudi prilagoditi
+function setChat(text) {
+  $("#chatInput").value = text;
+  growChat();
+}
+// Enter pošlje (kot prej), Shift+Enter naredi novo vrstico
+$("#chatInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    $("#chatForm").requestSubmit();
+  }
+});
+window.addEventListener("resize", growChat);
+
 $("#chatForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const input = $("#chatInput");
@@ -605,7 +646,7 @@ $("#chatForm").addEventListener("submit", async (e) => {
   try {
     hideSuggest();
     const res = await api("ai/parse", { method: "POST", body: { text, known: knownFoods() } });
-    input.value = "";
+    setChat("");
     showPending(res.items, { note: res.note, source: "chat", health: res.health, healthNote: res.health_note });
   } catch (err) {
     $("#pending").innerHTML = "";
@@ -636,12 +677,15 @@ function renderSuggest() {
   if (suggestions.length && wasEmpty && matchMedia("(max-width: 680px)").matches) $("#chatForm").scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
-$("#chatInput").addEventListener("input", renderSuggest);
+$("#chatInput").addEventListener("input", () => {
+  growChat();
+  renderSuggest();
+});
 $("#suggest").addEventListener("click", (e) => {
   const b = e.target.closest("[data-sg]");
   if (!b) return;
   const sg = suggestions[+b.dataset.sg];
-  $("#chatInput").value = "";
+  setChat("");
   $("#chatInput").blur();
   hideSuggest();
   showPending([{ ...sg.item }], { source: sg.own ? "quick" : "db" });
@@ -663,7 +707,7 @@ $("#suggest").addEventListener("click", (e) => {
     rec.interimResults = true;
     rec.onresult = (e) => {
       const said = [...e.results].map((r) => r[0].transcript).join(" ").trim();
-      input.value = (before ? before + " " : "") + said;
+      setChat((before ? before + " " : "") + said);
     };
     rec.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") toast(t("mic.denied"), true);
@@ -954,7 +998,7 @@ $("#photoInput").addEventListener("change", async (e) => {
     const { dataUrl, base64 } = await readImage(file);
     showLoading(t("loading.photo"));
     const res = await api("ai/photo", { method: "POST", body: { image: base64, media_type: "image/jpeg", note, known: knownFoods(8) } });
-    if (note) $("#chatInput").value = "";
+    if (note) setChat("");
     showPending(res.items, { note: res.note, source: "photo", image: dataUrl, health: res.health, healthNote: res.health_note });
   } catch (err) {
     $("#pending").innerHTML = "";

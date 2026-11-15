@@ -51,6 +51,7 @@
     <symbol id="i-barcode" viewBox="0 0 24 24"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3M7 8v8M10 8v8M13 8v8M17 8v8"/></symbol>
     <symbol id="i-send" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
     <symbol id="i-chef" viewBox="0 0 24 24"><path d="M7 14a4 4 0 1 1 1.5-7.7A4.5 4.5 0 0 1 16.5 6 4 4 0 1 1 17 14v6H7z"/><path d="M7 17h10"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
     <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
     <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
@@ -122,7 +123,7 @@
       <div class="composer card">
         <form id="chatForm" class="chat-form" autocomplete="off">
           <svg class="chat-ico"><use href="#i-sparkle"/></svg>
-          <input id="chatInput" data-i18n-ph="chat.placeholder" maxlength="2000" enterkeyhint="send">
+          <textarea id="chatInput" rows="1" data-i18n-ph="chat.placeholder" maxlength="2000" enterkeyhint="send"></textarea>
           <button class="mic-btn" type="button" id="micBtn" data-i18n-aria="mic.start" data-i18n-title="mic.start"><svg><use href="#i-mic"/></svg></button>
           <button class="send-btn" type="submit" data-i18n-aria="chat.send"><svg><use href="#i-send"/></svg></button>
         </form>
